@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 from typing import Dict, Optional, Union
 
 import mlx.nn as nn
@@ -47,6 +48,7 @@ class ModelArgs(BaseModelArgs):
     look_backward_layers = [0, 20]
     dit_dropout = 0.1
     dit_ff_mult = 2
+    audio_dropout: float = 0.0
 
 
 class Attention(nn.Module):
@@ -173,23 +175,110 @@ class Qwen2_5_Talker(nn.Module):
         return h, cache
 
 
-class AudioTower(nn.Module):
+class SinusoidsPositionEmbedding(nn.Module):
+    def __init__(self, length, channels, max_timescale=10000):
+        super().__init__()
+        # if channels % 2 != 0:
+        #     raise ValueError("SinusoidsPositionEmbedding needs even channels input")
+        # log_timescale_increment = np.log(max_timescale) / (channels // 2 - 1)
+        # inv_timescales = torch.exp(
+        #     -log_timescale_increment * torch.arange(channels // 2)
+        # ).float()
+        # scaled_time = (
+        #     torch.arange(length)[:, np.newaxis] * inv_timescales[np.newaxis, :]
+        # )
+        # self.register_buffer(
+        #     "positional_embedding",
+        #     torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=1),
+        #     persistent=False,
+        # )
+
+
+class Qwen2_5OmniAudioAttention(nn.Module):
+    """Multi-headed attention from 'Attention Is All You Need' paper"""
+
+    def __init__(
+        self,
+        args: ModelArgs,
+    ):
+        super().__init__()
+
+        # NM: load config properly
+        d_model = 1280
+        encoder_attention_heads = 20
+        attention_dropout = 0.0
+
+        self.embed_dim = d_model
+        self.num_heads = encoder_attention_heads
+        self.dropout = attention_dropout
+        self.head_dim = self.embed_dim // self.num_heads
+
+        if (self.head_dim * self.num_heads) != self.embed_dim:
+            raise ValueError(
+                f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.embed_dim}"
+                f" and `num_heads`: {self.num_heads})."
+            )
+        self.scaling = self.head_dim**-0.5
+        self.is_decoder = False
+        self.is_causal = False
+
+        self.k_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
+        self.v_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=True)
+        self.q_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=True)
+        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=True)
+
+
+class Qwen2_5OmniAudioEncoderLayer(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
-        # Simplified implementation of audio tower
-        self.layers = [
-            nn.Linear(args.hidden_size, args.hidden_size)
-            for _ in range(args.audio_tower_layers)
-        ]
-        self.ln_post = nn.LayerNorm(args.hidden_size)
-        self.proj = nn.Linear(args.hidden_size, args.hidden_size, bias=True)
-        self.audio_bos_eos_token = nn.Embedding(2, args.hidden_size)
 
-    def __call__(self, x):
-        for layer in self.layers:
-            x = layer(x)
-        x = self.ln_post(x)
-        return self.proj(x)
+        # NM: load config properly
+        d_model = 1280
+        activation_dropout = 0.0
+        encoder_ffn_dim = 5120
+
+        self.embed_dim = d_model
+        self.self_attn = Attention(args)
+        self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
+        self.dropout = args.audio_dropout
+        self.activation_fn = nn.GELU()
+        self.activation_dropout = activation_dropout
+        self.fc1 = nn.Linear(self.embed_dim, encoder_ffn_dim)
+        self.fc2 = nn.Linear(encoder_ffn_dim, self.embed_dim)
+        self.final_layer_norm = nn.LayerNorm(self.embed_dim)
+
+
+class Qwen2_5OmniAudioEncoder(nn.Module):
+    def __init__(self, args: ModelArgs):
+        self.dropout = args.audio_dropout
+
+        # NM: load config properly
+        d_model = 1280
+        num_mel_bins = 128
+        max_source_positions = 1500
+        scale_embedding = False
+        n_window = 100
+        output_dim = 2048
+        encoder_layers = 32
+
+        embed_dim = d_model
+        self.num_mel_bins = num_mel_bins
+        self.max_source_positions = max_source_positions
+        self.embed_scale = math.sqrt(embed_dim) if scale_embedding else 1.0
+        self.n_window = n_window
+        self.conv1 = nn.Conv1d(self.num_mel_bins, embed_dim, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, stride=2, padding=1)
+        self.positional_embedding = SinusoidsPositionEmbedding(
+            self.max_source_positions, embed_dim
+        )
+        self.audio_bos_eos_token = nn.Embedding(2, output_dim)
+        self.layers = [
+            Qwen2_5OmniAudioEncoderLayer(args) for _ in range(encoder_layers)
+        ]
+        self.ln_post = nn.LayerNorm(d_model)
+        self.avg_pooler = nn.AvgPool1d(2, stride=2)
+        self.proj = nn.Linear(d_model, output_dim)
+        self.gradient_checkpointing = False
 
 
 class VisualBlock(nn.Module):
@@ -269,7 +358,7 @@ class Qwen2_5_Thinker(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.model = Qwen2_5_ThinkerModel(args)
-        self.audio_tower = AudioTower(args)
+        self.audio_tower = Qwen2_5OmniAudioEncoder(args)
         self.visual = Visual(args)
         # self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
 

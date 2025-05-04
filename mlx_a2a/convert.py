@@ -74,9 +74,7 @@ MODEL_CONVERSION_DTYPES = ["float16", "bfloat16", "float32"]
 def fetch_from_hub(
     model_path: Path, lazy: bool = False
 ) -> Tuple[nn.Module, dict, PreTrainedTokenizer]:
-    model, config = load_model(
-        model_path, lazy, strict=False
-    )  # NM: strict=False is temporary
+    model, config = load_model(model_path, lazy)
     tokenizer = load_tokenizer(
         model_path, eos_token_ids=config.get("eos_token_id", None)
     )
