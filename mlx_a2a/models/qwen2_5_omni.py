@@ -11,6 +11,7 @@ from torch import float32 as torch_kaiser_window_dtype
 from torch import sinc as torch_sinc
 from torch import arange as torch_arange
 
+
 @dataclass
 class ModelArgs(BaseModelArgs):
     model_type: str
@@ -54,7 +55,9 @@ class ModelArgs(BaseModelArgs):
 
 
 class Qwen2MLP(nn.Module):
-    def __init__(self, args, *, bias: bool = False, hidden_size: int, intermediate_size: int):
+    def __init__(
+        self, args, *, bias: bool = False, hidden_size: int, intermediate_size: int
+    ):
         super().__init__()
         # NM: fix
 
@@ -66,7 +69,6 @@ class Qwen2MLP(nn.Module):
         self.act_fn = nn.SiLU()
 
 
-
 class Qwen2_5OmniRotaryEmbedding(nn.Module):
     def __init__(self, args: ModelArgs, device=None):
         super().__init__()
@@ -76,11 +78,9 @@ class Qwen2_5OmniRotaryEmbedding(nn.Module):
         max_position_embeddings = 32768
         head_dim = 64
 
-
         self.rope_type = rope_type
         self.max_seq_len_cached = max_position_embeddings
         self.original_max_seq_len = max_position_embeddings
-
 
         # rope init
         base = args.rope_theta
@@ -88,7 +88,9 @@ class Qwen2_5OmniRotaryEmbedding(nn.Module):
         dim = int(head_dim * partial_rotary_factor)
         self.attention_scaling = 1.0  # Unused in this type of RoPE
         # Compute the inverse frequencies
-        self._inv_freq = 1.0 / (base ** (mx.arange(0, dim, 2, dtype=mx.int64).astype(mx.float32) / dim))
+        self._inv_freq = 1.0 / (
+            base ** (mx.arange(0, dim, 2, dtype=mx.int64).astype(mx.float32) / dim)
+        )
 
 
 class Qwen2_5OmniAttention(nn.Module):
@@ -97,9 +99,16 @@ class Qwen2_5OmniAttention(nn.Module):
     and "Generating Long Sequences with Sparse Transformers".
     """
 
-    def __init__(self, args: ModelArgs, *, 
-                 hidden_size: int, layer_idx: int, num_attention_heads: int, num_key_value_heads: int,
-                 head_dim: int):
+    def __init__(
+        self,
+        args: ModelArgs,
+        *,
+        hidden_size: int,
+        layer_idx: int,
+        num_attention_heads: int,
+        num_key_value_heads: int,
+        head_dim: int,
+    ):
         super().__init__()
         self.layer_idx = layer_idx
         if layer_idx is None:
@@ -109,17 +118,12 @@ class Qwen2_5OmniAttention(nn.Module):
                 "when creating this class."
             )
 
-
         # NM: fix this
         attention_dropout = 0.0
         rope_scaling = {
-            "mrope_section": [
-                        16,
-                        16,
-                        0
-                    ],
+            "mrope_section": [16, 16, 0],
             "rope_type": "default",
-            "type": "default"
+            "type": "default",
         }
 
         self.hidden_size = hidden_size
@@ -139,18 +143,34 @@ class Qwen2_5OmniAttention(nn.Module):
 
         self.rotary_emb = Qwen2_5OmniRotaryEmbedding(args=args)
 
+
 class Qwen2_5OmniDecoderLayer(nn.Module):
-    def __init__(self, args: ModelArgs, *, layer_idx: int, hidden_size: int, num_attention_heads: int, num_key_value_heads: int,
-                 head_dim: int, intermediate_size: int):
+    def __init__(
+        self,
+        args: ModelArgs,
+        *,
+        layer_idx: int,
+        hidden_size: int,
+        num_attention_heads: int,
+        num_key_value_heads: int,
+        head_dim: int,
+        intermediate_size: int,
+    ):
         super().__init__()
 
-
         self.input_layernorm = nn.RMSNorm(hidden_size, eps=args.rms_norm_eps)
-        self.self_attn = Qwen2_5OmniAttention(args, layer_idx = layer_idx, hidden_size=hidden_size, num_attention_heads=num_attention_heads, num_key_value_heads=num_key_value_heads, head_dim=head_dim)
-        self.post_attention_layernorm = nn.RMSNorm(
-            hidden_size, eps=args.rms_norm_eps
+        self.self_attn = Qwen2_5OmniAttention(
+            args,
+            layer_idx=layer_idx,
+            hidden_size=hidden_size,
+            num_attention_heads=num_attention_heads,
+            num_key_value_heads=num_key_value_heads,
+            head_dim=head_dim,
         )
-        self.mlp = Qwen2MLP(args, hidden_size=hidden_size, intermediate_size=intermediate_size)
+        self.post_attention_layernorm = nn.RMSNorm(hidden_size, eps=args.rms_norm_eps)
+        self.mlp = Qwen2MLP(
+            args, hidden_size=hidden_size, intermediate_size=intermediate_size
+        )
 
     def __call__(self, x, mask=None, cache=None):
         residual = x
@@ -180,7 +200,16 @@ class Qwen2_5_TalkerModel(nn.Module):
 
         self.embed_tokens = nn.Embedding(vocab_size, embedding_size)
         self.layers = [
-            Qwen2_5OmniDecoderLayer(args, layer_idx=i, hidden_size=hidden_size, num_attention_heads=num_attention_heads, num_key_value_heads=num_key_value_heads, head_dim=head_dim, intermediate_size=intermediate_size) for i in range(num_hidden_layers)
+            Qwen2_5OmniDecoderLayer(
+                args,
+                layer_idx=i,
+                hidden_size=hidden_size,
+                num_attention_heads=num_attention_heads,
+                num_key_value_heads=num_key_value_heads,
+                head_dim=head_dim,
+                intermediate_size=intermediate_size,
+            )
+            for i in range(num_hidden_layers)
         ]
         self.norm = nn.RMSNorm(hidden_size, eps=args.rms_norm_eps)
 
@@ -238,7 +267,6 @@ class SinusoidsPositionEmbedding(nn.Module):
         # )
 
 
-
 class Qwen2_5OmniAudioAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -250,8 +278,6 @@ class Qwen2_5OmniAudioAttention(nn.Module):
 
         # NM: load config properly
         d_model = 1280
-        activation_dropout = 0.0
-        encoder_ffn_dim = 5120
         encoder_attention_heads = 20
         attention_dropout = 0.0
 
@@ -294,6 +320,7 @@ class Qwen2_5OmniAudioEncoderLayer(nn.Module):
         self.fc2 = nn.Linear(encoder_ffn_dim, self.embed_dim)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
 
+
 class Conv1dReshaped(nn.Conv1d):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -304,11 +331,17 @@ class Conv1dReshaped(nn.Conv1d):
     def __call__(self, x):
         # un-transpose the weights before call to match MLX expectation
         y = mx.conv1d(
-            x, self.weight.transpose(0, 2, 1), self.stride, self.padding, self.dilation, self.groups
+            x,
+            self.weight.transpose(0, 2, 1),
+            self.stride,
+            self.padding,
+            self.dilation,
+            self.groups,
         )
         if "bias" in self:
             y = y + self.bias
         return y
+
 
 class Conv3dReshaped(nn.Conv3d):
     def __init__(self, *args, **kwargs):
@@ -319,11 +352,17 @@ class Conv3dReshaped(nn.Conv3d):
 
     def __call__(self, x):
         # un-transpose the weights before call to match MLX expectation
-        y = mx.conv3d(x, self.weight.transpose(0, 2, 3, 4, 1), self.stride, self.padding, self.dilation)
+        y = mx.conv3d(
+            x,
+            self.weight.transpose(0, 2, 3, 4, 1),
+            self.stride,
+            self.padding,
+            self.dilation,
+        )
         if "bias" in self:
             y = y + self.bias
         return y
-    
+
 
 class ConvTranspose1dReshaped(nn.ConvTranspose1d):
     def __init__(self, *args, **kwargs):
@@ -346,6 +385,7 @@ class ConvTranspose1dReshaped(nn.ConvTranspose1d):
             y = y + self.bias
         return y
 
+
 class Qwen2_5OmniAudioEncoder(nn.Module):
     def __init__(self, args: ModelArgs):
         self.dropout = args.audio_dropout
@@ -364,8 +404,12 @@ class Qwen2_5OmniAudioEncoder(nn.Module):
         self.max_source_positions = max_source_positions
         self.embed_scale = math.sqrt(embed_dim) if scale_embedding else 1.0
         self.n_window = n_window
-        self.conv1 = Conv1dReshaped(self.num_mel_bins, embed_dim, kernel_size=3, padding=1)
-        self.conv2 = Conv1dReshaped(embed_dim, embed_dim, kernel_size=3, stride=2, padding=1)
+        self.conv1 = Conv1dReshaped(
+            self.num_mel_bins, embed_dim, kernel_size=3, padding=1
+        )
+        self.conv2 = Conv1dReshaped(
+            embed_dim, embed_dim, kernel_size=3, stride=2, padding=1
+        )
         self.positional_embedding = SinusoidsPositionEmbedding(
             self.max_source_positions, embed_dim
         )
@@ -379,12 +423,12 @@ class Qwen2_5OmniAudioEncoder(nn.Module):
         self.gradient_checkpointing = False
 
 
-
 class Qwen2RMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
         super().__init__()
         self.weight = mx.ones(hidden_size)
         self.variance_epsilon = eps
+
 
 class Qwen2_5OmniVisionBlock(nn.Module):
     def __init__(self, args: ModelArgs):
@@ -403,15 +447,9 @@ class Qwen2_5OmniVisionBlock(nn.Module):
         self.attn.proj = nn.Linear(hidden_size, hidden_size, bias=True)
 
         self.mlp = nn.Module()
-        self.mlp.gate_proj = nn.Linear(
-            hidden_size, intermediate_size, bias=True
-        )
-        self.mlp.down_proj = nn.Linear(
-            intermediate_size, hidden_size, bias=True
-        )
-        self.mlp.up_proj = nn.Linear(
-            hidden_size, intermediate_size, bias=True
-        )
+        self.mlp.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=True)
+        self.mlp.down_proj = nn.Linear(intermediate_size, hidden_size, bias=True)
+        self.mlp.up_proj = nn.Linear(hidden_size, intermediate_size, bias=True)
 
     def __call__(self, x):
         # Simplified implementation
@@ -428,7 +466,7 @@ class Qwen2_5OmniPatchMerger(nn.Module):
             nn.GELU(),
             nn.Linear(self.hidden_size, dim),
         ]
-    
+
     def __call__():
         pass
 
@@ -448,7 +486,14 @@ class Qwen2_5_VisionPatchEmbed(nn.Module):
         self.embed_dim = embed_dim
 
         kernel_size = [temporal_patch_size, patch_size, patch_size]
-        self.proj = Conv3dReshaped(in_channels, embed_dim, kernel_size=kernel_size, stride=kernel_size, bias=False)
+        self.proj = Conv3dReshaped(
+            in_channels,
+            embed_dim,
+            kernel_size=kernel_size,
+            stride=kernel_size,
+            bias=False,
+        )
+
 
 class Qwen2_5OmniVisionEncoder(nn.Module):
     def __init__(self, args: ModelArgs):
@@ -459,8 +504,6 @@ class Qwen2_5OmniVisionEncoder(nn.Module):
         temporal_patch_size = 2
         in_channels = 3
         hidden_size = 1280
-
-
 
         self.blocks = [Qwen2_5OmniVisionBlock(args) for _ in range(args.visual_blocks)]
         self.patch_embed = Qwen2_5_VisionPatchEmbed(
@@ -495,7 +538,16 @@ class Qwen2_5_ThinkerModel(nn.Module):
 
         self.embed_tokens = nn.Embedding(thinker_vocab_size, args.thinker_hidden_size)
         self.layers = [
-            Qwen2_5OmniDecoderLayer(args, layer_idx=layer_idx, hidden_size=hidden_size, num_attention_heads=num_attention_heads, num_key_value_heads=num_key_value_heads, head_dim=head_dim, intermediate_size=intermediate_size) for layer_idx in range(args.thinker_num_hidden_layers)
+            Qwen2_5OmniDecoderLayer(
+                args,
+                layer_idx=layer_idx,
+                hidden_size=hidden_size,
+                num_attention_heads=num_attention_heads,
+                num_key_value_heads=num_key_value_heads,
+                head_dim=head_dim,
+                intermediate_size=intermediate_size,
+            )
+            for layer_idx in range(args.thinker_num_hidden_layers)
         ]
         self.norm = nn.RMSNorm(args.thinker_hidden_size, eps=args.rms_norm_eps)
 
@@ -529,10 +581,9 @@ class SnakeBeta(nn.Module):
         self.beta = mx.zeros(in_features) * alpha
 
         self.no_div_by_zero = 0.000000001
-    
+
     def __call__(self, *args, **kwargs):
         pass
-
 
 
 def kaiser_sinc_filter1d(cutoff, half_width, kernel_size):
@@ -560,7 +611,9 @@ def kaiser_sinc_filter1d(cutoff, half_width, kernel_size):
     else:
         beta = 0.0
 
-    kaiser_window = torch_kaiser_window(kernel_size, beta=beta, periodic=False, dtype=torch_kaiser_window_dtype)
+    kaiser_window = torch_kaiser_window(
+        kernel_size, beta=beta, periodic=False, dtype=torch_kaiser_window_dtype
+    )
     kaiser_window = mx.array(kaiser_window.float().numpy())
 
     # Compute time indices
@@ -584,19 +637,25 @@ def kaiser_sinc_filter1d(cutoff, half_width, kernel_size):
     # return normalized_filter.view(1, 1, kernel_size)
     return mx.expand_dims(mx.expand_dims(normalized_filter.flatten(), 0), 0)
 
+
 class UpSample1d(nn.Module):
     def __init__(self, ratio=2, kernel_size=None):
         super().__init__()
         self.ratio = ratio
-        self.kernel_size = int(6 * ratio // 2) * 2 if kernel_size is None else kernel_size
+        self.kernel_size = (
+            int(6 * ratio // 2) * 2 if kernel_size is None else kernel_size
+        )
         self.stride = ratio
         self.pad = self.kernel_size // ratio - 1
         self.pad_left = self.pad * self.stride + (self.kernel_size - self.stride) // 2
-        self.pad_right = self.pad * self.stride + (self.kernel_size - self.stride + 1) // 2
+        self.pad_right = (
+            self.pad * self.stride + (self.kernel_size - self.stride + 1) // 2
+        )
 
-        self._filter = kaiser_sinc_filter1d(cutoff=0.5 / ratio, half_width=0.6 / ratio, kernel_size=self.kernel_size)
+        self._filter = kaiser_sinc_filter1d(
+            cutoff=0.5 / ratio, half_width=0.6 / ratio, kernel_size=self.kernel_size
+        )
         # self.register_buffer("filter", filter, persistent=False)
-
 
 
 class DownSample1d(nn.Module):
@@ -643,153 +702,133 @@ class AMPBlock(nn.Module):
     ):
         super().__init__()
 
-        self.convs1 =[
-                Conv1dReshaped(
-                    channels,
-                    channels,
-                    kernel_size,
-                    1,
-                    dilation=dilation[0],
-                    padding=self._get_padding(kernel_size, dilation[0]),
-                ),
-                Conv1dReshaped(
-                    channels,
-                    channels,
-                    kernel_size,
-                    1,
-                    dilation=dilation[1],
-                    padding=self._get_padding(kernel_size, dilation[1]),
-                ),
-                Conv1dReshaped(
-                    channels,
-                    channels,
-                    kernel_size,
-                    1,
-                    dilation=dilation[2],
-                    padding=self._get_padding(kernel_size, dilation[2]),
-                ),
-            ]
+        self.convs1 = [
+            Conv1dReshaped(
+                channels,
+                channels,
+                kernel_size,
+                1,
+                dilation=dilation[0],
+                padding=self._get_padding(kernel_size, dilation[0]),
+            ),
+            Conv1dReshaped(
+                channels,
+                channels,
+                kernel_size,
+                1,
+                dilation=dilation[1],
+                padding=self._get_padding(kernel_size, dilation[1]),
+            ),
+            Conv1dReshaped(
+                channels,
+                channels,
+                kernel_size,
+                1,
+                dilation=dilation[2],
+                padding=self._get_padding(kernel_size, dilation[2]),
+            ),
+        ]
 
         self.convs2 = [
-                Conv1dReshaped(
-                    channels,
-                    channels,
-                    kernel_size,
-                    1,
-                    dilation=1,
-                    padding=self._get_padding(kernel_size, 1),
-                ),
-                Conv1dReshaped(
-                    channels,
-                    channels,
-                    kernel_size,
-                    1,
-                    dilation=1,
-                    padding=self._get_padding(kernel_size, 1),
-                ),
-                Conv1dReshaped(
-                    channels,
-                    channels,
-                    kernel_size,
-                    1,
-                    dilation=1,
-                    padding=self._get_padding(kernel_size, 1),
-                ),
-            ]
+            Conv1dReshaped(
+                channels,
+                channels,
+                kernel_size,
+                1,
+                dilation=1,
+                padding=self._get_padding(kernel_size, 1),
+            ),
+            Conv1dReshaped(
+                channels,
+                channels,
+                kernel_size,
+                1,
+                dilation=1,
+                padding=self._get_padding(kernel_size, 1),
+            ),
+            Conv1dReshaped(
+                channels,
+                channels,
+                kernel_size,
+                1,
+                dilation=1,
+                padding=self._get_padding(kernel_size, 1),
+            ),
+        ]
 
-        self.num_layers = len(self.convs1) + len(self.convs2)  # total number of conv layers
+        self.num_layers = len(self.convs1) + len(
+            self.convs2
+        )  # total number of conv layers
 
-        self.activations = [TorchActivation1d(activation=SnakeBeta(channels)) for _ in range(self.num_layers)]
+        self.activations = [
+            TorchActivation1d(activation=SnakeBeta(channels))
+            for _ in range(self.num_layers)
+        ]
 
     def _get_padding(self, kernel_size, dilation=1):
         return int((kernel_size * dilation - dilation) / 2)
+
 
 class Qwen2_5OmniToken2WavBigVGANModel(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
 
         # NM: fix
-        resblock_kernel_sizes = [
-            3,
-            7,
-            11
-        ]
-        upsample_rates = [
-            5,
-            3,
-            2,
-            2,
-            2,
-            2
-        ]
+        resblock_kernel_sizes = [3, 7, 11]
+        upsample_rates = [5, 3, 2, 2, 2, 2]
         mel_dim = 80
         upsample_initial_channel = 1536
-        upsample_rates = [
-            5,
-            3,
-            2,
-            2,
-            2,
-            2
-        ]
-        upsample_kernel_sizes = [
-            11,
-            7,
-            4,
-            4,
-            4,
-            4
-        ]
-        resblock_dilation_sizes = [
-            [
-            1,
-            3,
-            5
-            ],
-            [
-            1,
-            3,
-            5
-            ],
-            [
-            1,
-            3,
-            5
-            ]
-        ]
-
-
+        upsample_rates = [5, 3, 2, 2, 2, 2]
+        upsample_kernel_sizes = [11, 7, 4, 4, 4, 4]
+        resblock_dilation_sizes = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
 
         self.num_residual_blocks = len(resblock_kernel_sizes)
         self.num_upsample_layers = len(upsample_rates)
 
-        self.conv_pre = Conv1dReshaped(mel_dim, upsample_initial_channel, 7, 1, padding=3)
+        self.conv_pre = Conv1dReshaped(
+            mel_dim, upsample_initial_channel, 7, 1, padding=3
+        )
 
         # Removing extra ModuleList breaks official state dict
         self.ups = [
-                [
-                    ConvTranspose1dReshaped(
-                        upsample_initial_channel // (2**layer_idx),
-                        upsample_initial_channel // (2 ** (layer_idx + 1)),
-                        kernel_size,
-                        stride,
-                        padding=(kernel_size - stride) // 2,
-                    )
-                ]
-            for layer_idx, (stride, kernel_size) in enumerate(zip(upsample_rates, upsample_kernel_sizes))
+            [
+                ConvTranspose1dReshaped(
+                    upsample_initial_channel // (2**layer_idx),
+                    upsample_initial_channel // (2 ** (layer_idx + 1)),
+                    kernel_size,
+                    stride,
+                    padding=(kernel_size - stride) // 2,
+                )
+            ]
+            for layer_idx, (stride, kernel_size) in enumerate(
+                zip(upsample_rates, upsample_kernel_sizes)
+            )
         ]
 
         self.resblocks = [
-                AMPBlock(upsample_initial_channel // (2 ** (layer_idx + 1)), kernel_size, dilation)
-                for layer_idx in range(self.num_upsample_layers)
-                for kernel_size, dilation in zip(resblock_kernel_sizes, resblock_dilation_sizes)
-            ]
+            AMPBlock(
+                upsample_initial_channel // (2 ** (layer_idx + 1)),
+                kernel_size,
+                dilation,
+            )
+            for layer_idx in range(self.num_upsample_layers)
+            for kernel_size, dilation in zip(
+                resblock_kernel_sizes, resblock_dilation_sizes
+            )
+        ]
 
         self.activation_post = TorchActivation1d(
-            activation=SnakeBeta(upsample_initial_channel // (2**self.num_upsample_layers))
+            activation=SnakeBeta(
+                upsample_initial_channel // (2**self.num_upsample_layers)
+            )
         )
         self.conv_post = Conv1dReshaped(
-            upsample_initial_channel // (2**self.num_upsample_layers), 1, 7, 1, padding=3, bias=False
+            upsample_initial_channel // (2**self.num_upsample_layers),
+            1,
+            7,
+            1,
+            padding=3,
+            bias=False,
         )
 
 
@@ -815,7 +854,6 @@ class DiTAttention(nn.Module):
         num_attention_heads = 16
         head_dim = 64
         dropout = 0.1
-
 
         self.dim = hidden_size
         self.heads = num_attention_heads
@@ -847,7 +885,6 @@ class DiTDecoderLayer(nn.Module):
         # NM: fix this
         hidden_size = 1024
 
-
         self.attn_norm = Qwen2_5_OmniAdaLayerNormZero(hidden_size)
 
         self.attn = DiTAttention(args)
@@ -871,7 +908,6 @@ class DiTTimestepEmbedding(nn.Module):
         super().__init__()
         self.time_embed = SinusPositionEmbedding(freq_embed_dim)
         self.time_mlp = [nn.Linear(freq_embed_dim, dim), nn.SiLU(), nn.Linear(dim, dim)]
-
 
 
 class TimeDelayNetBlock(nn.Module):
@@ -902,15 +938,16 @@ class Res2NetBlock(nn.Module):
         hidden_channel = out_channels // scale
 
         self.blocks = [
-                TimeDelayNetBlock(
-                    in_channel,
-                    hidden_channel,
-                    kernel_size=kernel_size,
-                    dilation=dilation,
-                )
-                for i in range(scale - 1)
-            ]
+            TimeDelayNetBlock(
+                in_channel,
+                hidden_channel,
+                kernel_size=kernel_size,
+                dilation=dilation,
+            )
+            for i in range(scale - 1)
+        ]
         self.scale = scale
+
 
 class AttentiveStatisticsPooling(nn.Module):
     """This class implements an attentive statistic pooling layer for each channel.
@@ -953,6 +990,7 @@ class SqueezeExcitationBlock(nn.Module):
         )
         self.sigmoid = nn.Sigmoid()
 
+
 class SqueezeExcitationRes2NetBlock(nn.Module):
     """An implementation of building block in ECAPA-TDNN, i.e.,
     TDNN-Res2Net-TDNN-SqueezeExcitationBlock.
@@ -975,7 +1013,9 @@ class SqueezeExcitationRes2NetBlock(nn.Module):
             kernel_size=1,
             dilation=1,
         )
-        self.res2net_block = Res2NetBlock(out_channels, out_channels, res2net_scale, kernel_size, dilation)
+        self.res2net_block = Res2NetBlock(
+            out_channels, out_channels, res2net_scale, kernel_size, dilation
+        )
         self.tdnn2 = TimeDelayNetBlock(
             out_channels,
             out_channels,
@@ -995,38 +1035,21 @@ class ECAPA_TimeDelayNet(nn.Module):
         super().__init__()
 
         # NM: fix
-        enc_channels = [
-            256,
-            256,
-            256,
-            256,
-            768
-        ]
-        enc_kernel_sizes = [
-            5,
-            3,
-            3,
-            3,
-            1
-        ]
-        enc_dilations = [
-            1,
-            2,
-            3,
-            4,
-            1
-        ]
+        enc_channels = [256, 256, 256, 256, 768]
+        enc_kernel_sizes = [5, 3, 3, 3, 1]
+        enc_dilations = [1, 2, 3, 4, 1]
         mel_dim = 80
         enc_res2net_scale = 2
         enc_se_channels = 64
-        enc_attention_channels=64
+        enc_attention_channels = 64
         enc_dim = 128
-
 
         if len(enc_channels) != len(enc_kernel_sizes) or len(enc_channels) != len(
             enc_dilations
         ):
-            raise ValueError("enc_channels, enc_kernel_sizes and enc_dilations should have same length")
+            raise ValueError(
+                "enc_channels, enc_kernel_sizes and enc_dilations should have same length"
+            )
         self.channels = enc_channels
         self.blocks = []
 
@@ -1076,6 +1099,7 @@ class ECAPA_TimeDelayNet(nn.Module):
             # padding_mode="reflect",
         )
 
+
 class DiTInputEmbedding(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
@@ -1092,6 +1116,7 @@ class DiTInputEmbedding(nn.Module):
             hidden_size,
         )
         self.spk_encoder = ECAPA_TimeDelayNet(args)
+
 
 # Transformer backbone using DiT blocks
 class DiTCodecEmbedding(nn.Module):
@@ -1110,13 +1135,14 @@ class Qwen2_5_OmniAdaLayerNormZero_Final(nn.Module):
 
         self.norm = nn.LayerNorm(dim, affine=False, eps=1e-6)
 
+
 class Code2WavDITModel(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
 
         # NM: Fix this
         num_hidden_layers = 22
-        hidden_size=1024
+        hidden_size = 1024
         num_embeds = 8193
         emd_dim = 512
         repeats = 2
@@ -1178,10 +1204,11 @@ class Model(nn.Module):
         h, cache = self.talker(inputs, mask, cache)
         return h
 
-
     def sanitize(self, weights):
         # Remove unused precomputed rotary freqs
-        weights = {k: v for k, v in weights.items() if "attention.rope.inv_freq" not in k}
+        weights = {
+            k: v for k, v in weights.items() if "attention.rope.inv_freq" not in k
+        }
         weights = {k: v for k, v in weights.items() if "rotary_embed.inv_freq" not in k}
 
         # Remove unused precomputed sampling filters
@@ -1189,7 +1216,6 @@ class Model(nn.Module):
         weights = {k: v for k, v in weights.items() if "upsample.filter" not in k}
 
         return weights
-
 
     @property
     def layers(self):
