@@ -306,13 +306,14 @@ class Qwen2_5OmniAttention(nn.Module):
                 "when creating this class."
             )
 
-        # NM: fix this
-        attention_dropout = 0.0
-        rope_scaling = {
-            "mrope_section": [16, 16, 0],
-            "rope_type": "default",
-            "type": "default",
-        }
+        if isinstance(args, TalkerConfigArgs):
+            attention_dropout = args.attention_dropout
+            rope_scaling = args.rope_scaling
+        elif isinstance(args, ThinkerConfigArgs):
+            attention_dropout = args.text_config.attention_dropout
+            rope_scaling = args.text_config.rope_scaling
+        else:
+            raise NotImplementedError
 
         self.hidden_size = hidden_size
         self.num_heads = num_attention_heads
