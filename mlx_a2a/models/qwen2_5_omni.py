@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+import inspect
+from dataclasses import dataclass, field
 import math
-from typing import Dict, Optional, Union
+from typing import Dict, Union, List, Any
 
 import mlx.nn as nn
 import mlx.core as mx
@@ -13,53 +14,221 @@ from torch import arange as torch_arange
 
 
 @dataclass
+class ThinkerTextConfigArgs:
+    hidden_size: int
+    num_hidden_layers: int
+    num_attention_heads: int
+    intermediate_size: int
+    num_key_value_heads: int
+    vocab_size: int
+    rms_norm_eps: float
+    rope_theta: float
+    max_position_embeddings: int
+    rope_scaling: Dict[str, Any]
+    attention_dropout: float
+
+
+@dataclass
+class ThinkerAudioConfigArgs:
+    d_model: int
+    encoder_attention_heads: int
+    attention_dropout: float
+    activation_dropout: float
+    encoder_ffn_dim: int
+    encoder_layers: int
+    num_mel_bins: int
+    max_source_positions: int
+    scale_embedding: bool
+    n_window: int
+    output_dim: int
+    dropout: float
+
+
+@dataclass
+class ThinkerVisionConfigArgs:
+    depth: int
+    hidden_size: int
+    intermediate_size: int
+    patch_size: int
+    temporal_patch_size: int
+    in_channels: int
+    out_hidden_size: int
+    spatial_merge_size: int
+
+
+@dataclass
+class ThinkerConfigArgs:
+    text_config: ThinkerTextConfigArgs
+    audio_config: ThinkerAudioConfigArgs
+    vision_config: ThinkerVisionConfigArgs
+
+    @classmethod
+    def from_dict(cls, params: dict):
+        text_params = params.get("text_config", {})
+        audio_params = params.get("audio_config", {})
+        vision_params = params.get("vision_config", {})
+
+        text_cfg = ThinkerTextConfigArgs(
+            **{
+                k: v
+                for k, v in text_params.items()
+                if k in inspect.signature(ThinkerTextConfigArgs).parameters
+            }
+        )
+        audio_cfg = ThinkerAudioConfigArgs(
+            **{
+                k: v
+                for k, v in audio_params.items()
+                if k in inspect.signature(ThinkerAudioConfigArgs).parameters
+            }
+        )
+        vision_cfg = ThinkerVisionConfigArgs(
+            **{
+                k: v
+                for k, v in vision_params.items()
+                if k in inspect.signature(ThinkerVisionConfigArgs).parameters
+            }
+        )
+
+        other_params = {
+            k: v
+            for k, v in params.items()
+            if k in inspect.signature(cls).parameters
+            and k not in ["text_config", "audio_config", "vision_config"]
+        }
+        return cls(
+            text_config=text_cfg,
+            audio_config=audio_cfg,
+            vision_config=vision_cfg,
+            **other_params,
+        )
+
+
+@dataclass
+class TalkerConfigArgs:
+    vocab_size: int
+    embedding_size: int
+    num_hidden_layers: int
+    hidden_size: int
+    head_dim: int
+    num_key_value_heads: int
+    num_attention_heads: int
+    intermediate_size: int
+    rms_norm_eps: float
+    rope_theta: float
+    max_position_embeddings: int
+    rope_scaling: Dict[str, Any]
+    attention_dropout: float
+
+    @classmethod
+    def from_dict(cls, params: dict):
+        # Filter params to only include keys defined in this dataclass
+        return cls(
+            **{
+                k: v
+                for k, v in params.items()
+                if k in inspect.signature(cls).parameters
+            }
+        )
+
+
+@dataclass
+class Token2WavDitConfigArgs:
+    ff_mult: int  # Corresponds to dit_ff_mult
+    dropout: float  # Corresponds to dit_dropout
+    dim: int  # Corresponds to dit_hidden_size
+    heads: int  # Corresponds to dit_num_attention_heads
+    head_dim: int
+    num_embeds: int
+    emb_dim: int
+    repeats: int
+    depth: int
+    enc_dim: int
+    enc_emb_dim: int
+    mel_dim: int
+    enc_channels: List[int]
+    enc_kernel_sizes: List[int]
+    enc_dilations: List[int]
+    enc_res2net_scale: int
+    enc_se_channels: int
+    enc_attention_channels: int
+    look_ahead_layers: List[int] = field(default_factory=lambda: [10])
+    look_backward_layers: List[int] = field(default_factory=lambda: [0, 20])
+
+
+@dataclass
+class Token2WavBigVGANConfigArgs:
+    mel_dim: int
+    upsample_initial_channel: int
+    upsample_rates: List[int]
+    upsample_kernel_sizes: List[int]
+    resblock_kernel_sizes: List[int]
+    resblock_dilation_sizes: List[List[int]]
+
+
+@dataclass
+class Token2WavConfigArgs:
+    dit_config: Token2WavDitConfigArgs
+    bigvgan_config: Token2WavBigVGANConfigArgs
+
+    @classmethod
+    def from_dict(cls, params: dict):
+        dit_params = params.get("dit_config", {})
+        bigvgan_params = params.get("bigvgan_config", {})
+
+        dit_cfg = Token2WavDitConfigArgs(
+            **{
+                k: v
+                for k, v in dit_params.items()
+                if k in inspect.signature(Token2WavDitConfigArgs).parameters
+            }
+        )
+        bigvgan_cfg = Token2WavBigVGANConfigArgs(
+            **{
+                k: v
+                for k, v in bigvgan_params.items()
+                if k in inspect.signature(Token2WavBigVGANConfigArgs).parameters
+            }
+        )
+
+        other_params = {
+            k: v
+            for k, v in params.items()
+            if k in inspect.signature(cls).parameters
+            and k not in ["dit_config", "bigvgan_config"]
+        }
+        return cls(dit_config=dit_cfg, bigvgan_config=bigvgan_cfg, **other_params)
+
+
+# --- Main ModelArgs ---
+@dataclass
 class ModelArgs(BaseModelArgs):
     model_type: str
+    torch_dtype: str
+    thinker_config: dict = field(default_factory=dict)
+    talker_config: dict = field(default_factory=dict)
+    token2wav_config: dict = field(default_factory=dict)
 
-    # talker args??
-    num_hidden_layers: int = 24
-    num_attention_heads: int = 32
-    intermediate_size: int = 11008
-    num_key_value_heads: int = 32
-    rms_norm_eps: float = 1e-6
-    vocab_size: int = 151936
-    max_position_embeddings: int = 32768
-    rope_theta: float = 10000.0
-    rope_traditional: bool = False
-    rope_scaling: Optional[Dict[str, Union[float, str]]] = None
+    thinker: ThinkerConfigArgs = field(init=False)
+    talker: TalkerConfigArgs = field(init=False)
+    token2wav: Token2WavConfigArgs = field(init=False)
 
-    # Thinker specific parameters
-    thinker_hidden_size: int = 2048
-    thinker_num_hidden_layers: int = 36
-    thinker_num_attention_heads: int = 32
-    thinker_intermediate_size: int = 11008
-    thinker_num_key_value_heads: int = 32
-
-    # Audio tower parameters
-    audio_tower_layers: int = 32
-
-    # Visual parameters
-    visual_blocks: int = 32
-
-    # NM: cleanup
-    talker_head_dim = 64
-    out_hidden_size: int = 2048
-    spatial_merge_size: int = 2
-    vision_hidden_size: int = 1280
-    dit_config_depth: int = 22
-    look_ahead_layers = ([10],)
-    look_backward_layers = [0, 20]
-    dit_dropout = 0.1
-    dit_ff_mult = 2
-    audio_dropout: float = 0.0
+    def __post_init__(self):
+        self.thinker = ThinkerConfigArgs.from_dict(self.thinker_config or {})
+        self.talker = TalkerConfigArgs.from_dict(self.talker_config or {})
+        self.token2wav = Token2WavConfigArgs.from_dict(self.token2wav_config or {})
 
 
 class Qwen2MLP(nn.Module):
     def __init__(
-        self, args, *, bias: bool = False, hidden_size: int, intermediate_size: int
+        self,
+        args: Union[TalkerConfigArgs, ThinkerConfigArgs],
+        *,
+        bias: bool = False,
+        hidden_size: int,
+        intermediate_size: int,
     ):
         super().__init__()
-        # NM: fix
 
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
@@ -70,20 +239,39 @@ class Qwen2MLP(nn.Module):
 
 
 class Qwen2_5OmniRotaryEmbedding(nn.Module):
-    def __init__(self, args: ModelArgs, device=None):
+    def __init__(
+        self,
+        args: Union[TalkerConfigArgs, ThinkerConfigArgs],
+        head_dim: int,
+        device=None,
+    ):
         super().__init__()
 
-        # NM: fix this
-        rope_type = "default"
-        max_position_embeddings = 32768
-        head_dim = 64
+        # Determine rope_type and max_position_embeddings based on the type of args
+        if isinstance(args, TalkerConfigArgs):
+            rope_type = (
+                args.rope_scaling.get("rope_type", "default")
+                if args.rope_scaling
+                else "default"
+            )
+            max_position_embeddings = args.max_position_embeddings
+            base = args.rope_theta
+        elif isinstance(args, ThinkerConfigArgs):
+            rope_type = (
+                args.text_config.rope_scaling.get("rope_type", "default")
+                if args.text_config.rope_scaling
+                else "default"
+            )
+            max_position_embeddings = args.text_config.max_position_embeddings
+            base = args.text_config.rope_theta
+        else:
+            raise NotImplementedError
 
         self.rope_type = rope_type
         self.max_seq_len_cached = max_position_embeddings
         self.original_max_seq_len = max_position_embeddings
 
         # rope init
-        base = args.rope_theta
         partial_rotary_factor = 1.0
         dim = int(head_dim * partial_rotary_factor)
         self.attention_scaling = 1.0  # Unused in this type of RoPE
@@ -101,7 +289,7 @@ class Qwen2_5OmniAttention(nn.Module):
 
     def __init__(
         self,
-        args: ModelArgs,
+        args: Union[TalkerConfigArgs, ThinkerConfigArgs],
         *,
         hidden_size: int,
         layer_idx: int,
@@ -141,13 +329,13 @@ class Qwen2_5OmniAttention(nn.Module):
         self.v_proj = nn.Linear(hidden_size, num_key_value_heads * head_dim, bias=True)
         self.o_proj = nn.Linear(num_attention_heads * head_dim, hidden_size, bias=False)
 
-        self.rotary_emb = Qwen2_5OmniRotaryEmbedding(args=args)
+        self.rotary_emb = Qwen2_5OmniRotaryEmbedding(args=args, head_dim=head_dim)
 
 
 class Qwen2_5OmniDecoderLayer(nn.Module):
     def __init__(
         self,
-        args: ModelArgs,
+        args: Union[TalkerConfigArgs, ThinkerConfigArgs],
         *,
         layer_idx: int,
         hidden_size: int,
@@ -158,7 +346,14 @@ class Qwen2_5OmniDecoderLayer(nn.Module):
     ):
         super().__init__()
 
-        self.input_layernorm = nn.RMSNorm(hidden_size, eps=args.rms_norm_eps)
+        if isinstance(args, TalkerConfigArgs):
+            rms_norm_eps = args.rms_norm_eps
+        elif isinstance(args, ThinkerConfigArgs):
+            rms_norm_eps = args.text_config.rms_norm_eps
+        else:
+            raise NotImplementedError
+
+        self.input_layernorm = nn.RMSNorm(hidden_size, eps=rms_norm_eps)
         self.self_attn = Qwen2_5OmniAttention(
             args,
             layer_idx=layer_idx,
@@ -167,7 +362,7 @@ class Qwen2_5OmniDecoderLayer(nn.Module):
             num_key_value_heads=num_key_value_heads,
             head_dim=head_dim,
         )
-        self.post_attention_layernorm = nn.RMSNorm(hidden_size, eps=args.rms_norm_eps)
+        self.post_attention_layernorm = nn.RMSNorm(hidden_size, eps=rms_norm_eps)
         self.mlp = Qwen2MLP(
             args, hidden_size=hidden_size, intermediate_size=intermediate_size
         )
@@ -186,32 +381,22 @@ class Qwen2_5OmniDecoderLayer(nn.Module):
 
 
 class Qwen2_5_TalkerModel(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: TalkerConfigArgs):
         super().__init__()
-        # NM: fix this
-        vocab_size = 8448
-        embedding_size = 2048
-        num_hidden_layers = 24
-        hidden_size = 896
-        head_dim = 64
-        num_key_value_heads = 2
-        num_attention_heads = 14
-        intermediate_size = 4864
-
-        self.embed_tokens = nn.Embedding(vocab_size, embedding_size)
+        self.embed_tokens = nn.Embedding(args.vocab_size, args.embedding_size)
         self.layers = [
             Qwen2_5OmniDecoderLayer(
                 args,
                 layer_idx=i,
-                hidden_size=hidden_size,
-                num_attention_heads=num_attention_heads,
-                num_key_value_heads=num_key_value_heads,
-                head_dim=head_dim,
-                intermediate_size=intermediate_size,
+                hidden_size=args.hidden_size,
+                num_attention_heads=args.num_attention_heads,
+                num_key_value_heads=args.num_key_value_heads,
+                head_dim=args.head_dim,
+                intermediate_size=args.intermediate_size,
             )
-            for i in range(num_hidden_layers)
+            for i in range(args.num_hidden_layers)
         ]
-        self.norm = nn.RMSNorm(hidden_size, eps=args.rms_norm_eps)
+        self.norm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
     def __call__(self, inputs, mask=None, cache=None):
         h = self.embed_tokens(inputs)
@@ -229,18 +414,13 @@ class Qwen2_5_TalkerModel(nn.Module):
 
 
 class Qwen2_5_Talker(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: TalkerConfigArgs):
         super().__init__()
 
-        # NM: fix
-        talker_hidden_size = 896
-        talker_vocab_size = 8448
-        talker_embedding_size = 2048
-
         self.model = Qwen2_5_TalkerModel(args)
-        self.codec_head = nn.Linear(talker_hidden_size, talker_vocab_size, bias=False)
+        self.codec_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
         self.thinker_to_talker_proj = nn.Linear(
-            talker_embedding_size, talker_hidden_size, bias=True
+            args.embedding_size, args.hidden_size, bias=True
         )
 
     def __call__(self, inputs, mask=None, cache=None, thinker_output=None):
@@ -272,18 +452,13 @@ class Qwen2_5OmniAudioAttention(nn.Module):
 
     def __init__(
         self,
-        args: ModelArgs,
+        args: ThinkerConfigArgs,
     ):
         super().__init__()
 
-        # NM: load config properly
-        d_model = 1280
-        encoder_attention_heads = 20
-        attention_dropout = 0.0
-
-        self.embed_dim = d_model
-        self.num_heads = encoder_attention_heads
-        self.dropout = attention_dropout
+        self.embed_dim = args.audio_config.d_model
+        self.num_heads = args.audio_config.encoder_attention_heads
+        self.dropout = args.audio_config.attention_dropout
         self.head_dim = self.embed_dim // self.num_heads
 
         if (self.head_dim * self.num_heads) != self.embed_dim:
@@ -302,22 +477,17 @@ class Qwen2_5OmniAudioAttention(nn.Module):
 
 
 class Qwen2_5OmniAudioEncoderLayer(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: ThinkerConfigArgs):
         super().__init__()
 
-        # NM: load config properly
-        d_model = 1280
-        activation_dropout = 0.0
-        encoder_ffn_dim = 5120
-
-        self.embed_dim = d_model
+        self.embed_dim = args.audio_config.d_model
         self.self_attn = Qwen2_5OmniAudioAttention(args)
         self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
-        self.dropout = args.audio_dropout
+        self.dropout = args.audio_config.dropout
         self.activation_fn = nn.GELU()
-        self.activation_dropout = activation_dropout
-        self.fc1 = nn.Linear(self.embed_dim, encoder_ffn_dim)
-        self.fc2 = nn.Linear(encoder_ffn_dim, self.embed_dim)
+        self.activation_dropout = args.audio_config.activation_dropout
+        self.fc1 = nn.Linear(self.embed_dim, args.audio_config.encoder_ffn_dim)
+        self.fc2 = nn.Linear(args.audio_config.encoder_ffn_dim, self.embed_dim)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
 
 
@@ -387,23 +557,17 @@ class ConvTranspose1dReshaped(nn.ConvTranspose1d):
 
 
 class Qwen2_5OmniAudioEncoder(nn.Module):
-    def __init__(self, args: ModelArgs):
-        self.dropout = args.audio_dropout
+    def __init__(self, args: ThinkerConfigArgs):
+        super().__init__()
+        self.dropout = args.audio_config.dropout
 
-        # NM: load config properly
-        d_model = 1280
-        num_mel_bins = 128
-        max_source_positions = 1500
-        scale_embedding = False
-        n_window = 100
-        output_dim = 2048
-        encoder_layers = 32
-
-        embed_dim = d_model
-        self.num_mel_bins = num_mel_bins
-        self.max_source_positions = max_source_positions
-        self.embed_scale = math.sqrt(embed_dim) if scale_embedding else 1.0
-        self.n_window = n_window
+        embed_dim = args.audio_config.d_model
+        self.num_mel_bins = args.audio_config.num_mel_bins
+        self.max_source_positions = args.audio_config.max_source_positions
+        self.embed_scale = (
+            math.sqrt(embed_dim) if args.audio_config.scale_embedding else 1.0
+        )
+        self.n_window = args.audio_config.n_window
         self.conv1 = Conv1dReshaped(
             self.num_mel_bins, embed_dim, kernel_size=3, padding=1
         )
@@ -413,13 +577,14 @@ class Qwen2_5OmniAudioEncoder(nn.Module):
         self.positional_embedding = SinusoidsPositionEmbedding(
             self.max_source_positions, embed_dim
         )
-        self.audio_bos_eos_token = nn.Embedding(2, output_dim)
+        self.audio_bos_eos_token = nn.Embedding(2, args.audio_config.output_dim)
         self.layers = [
-            Qwen2_5OmniAudioEncoderLayer(args) for _ in range(encoder_layers)
+            Qwen2_5OmniAudioEncoderLayer(args)
+            for _ in range(args.audio_config.encoder_layers)
         ]
-        self.ln_post = nn.LayerNorm(d_model)
+        self.ln_post = nn.LayerNorm(args.audio_config.d_model)
         self.avg_pooler = nn.AvgPool1d(2, stride=2)
-        self.proj = nn.Linear(d_model, output_dim)
+        self.proj = nn.Linear(args.audio_config.d_model, args.audio_config.output_dim)
         self.gradient_checkpointing = False
 
 
@@ -431,15 +596,16 @@ class Qwen2RMSNorm(nn.Module):
 
 
 class Qwen2_5OmniVisionBlock(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: ThinkerConfigArgs):
         super().__init__()
 
-        # NM: fix
-        hidden_size = 1280
-        intermediate_size = 3420
+        hidden_size = args.vision_config.hidden_size
+        intermediate_size = args.vision_config.intermediate_size
+        # Using thinker's rms_norm_eps for now
+        rms_norm_eps = args.text_config.rms_norm_eps
 
-        self.norm1 = Qwen2RMSNorm(hidden_size, eps=1e-6)
-        self.norm2 = Qwen2RMSNorm(hidden_size, eps=1e-6)
+        self.norm1 = Qwen2RMSNorm(hidden_size, eps=rms_norm_eps)
+        self.norm2 = Qwen2RMSNorm(hidden_size, eps=rms_norm_eps)
         self.attn = nn.Module()
         self.attn.q = nn.Linear(hidden_size, hidden_size, bias=True)
         self.attn.k = nn.Linear(hidden_size, hidden_size, bias=True)
@@ -457,38 +623,40 @@ class Qwen2_5OmniVisionBlock(nn.Module):
 
 
 class Qwen2_5OmniPatchMerger(nn.Module):
-    def __init__(self, dim: int, context_dim: int, spatial_merge_size: int = 2) -> None:
+    def __init__(self, args: ThinkerConfigArgs) -> None:
         super().__init__()
+        dim = args.vision_config.out_hidden_size
+        context_dim = args.vision_config.hidden_size
+        spatial_merge_size = args.vision_config.spatial_merge_size
+        # Assuming Thinker's text_config rms_norm_eps is used here too
+        rms_norm_eps = args.text_config.rms_norm_eps
+
         self.hidden_size = context_dim * (spatial_merge_size**2)
-        self.ln_q = nn.RMSNorm(context_dim, eps=1e-6)
+        self.ln_q = nn.RMSNorm(context_dim, eps=rms_norm_eps)
         self.mlp = [
             nn.Linear(self.hidden_size, self.hidden_size),
             nn.GELU(),
             nn.Linear(self.hidden_size, dim),
         ]
 
-    def __call__():
+    def __call__(self, x):  # Added x parameter
         pass
 
 
 class Qwen2_5_VisionPatchEmbed(nn.Module):
-    def __init__(
-        self,
-        patch_size: int = 14,
-        temporal_patch_size: int = 2,
-        in_channels: int = 3,
-        embed_dim: int = 1152,
-    ):
+    def __init__(self, args: ThinkerConfigArgs):
         super().__init__()
-        self.patch_size = patch_size
-        self.temporal_patch_size = temporal_patch_size
-        self.in_channels = in_channels
-        self.embed_dim = embed_dim
+        self.patch_size = args.vision_config.patch_size
+        self.temporal_patch_size = args.vision_config.temporal_patch_size
+        self.in_channels = args.vision_config.in_channels
+        self.embed_dim = (
+            args.vision_config.hidden_size
+        )  # embed_dim is vision hidden_size
 
-        kernel_size = [temporal_patch_size, patch_size, patch_size]
+        kernel_size = [self.temporal_patch_size, self.patch_size, self.patch_size]
         self.proj = Conv3dReshaped(
-            in_channels,
-            embed_dim,
+            self.in_channels,
+            self.embed_dim,
             kernel_size=kernel_size,
             stride=kernel_size,
             bias=False,
@@ -496,28 +664,15 @@ class Qwen2_5_VisionPatchEmbed(nn.Module):
 
 
 class Qwen2_5OmniVisionEncoder(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: ThinkerConfigArgs):
         super().__init__()
 
-        # NM: fix
-        patch_size = 14
-        temporal_patch_size = 2
-        in_channels = 3
-        hidden_size = 1280
+        self.blocks = [
+            Qwen2_5OmniVisionBlock(args) for _ in range(args.vision_config.depth)
+        ]
+        self.patch_embed = Qwen2_5_VisionPatchEmbed(args)
 
-        self.blocks = [Qwen2_5OmniVisionBlock(args) for _ in range(args.visual_blocks)]
-        self.patch_embed = Qwen2_5_VisionPatchEmbed(
-            patch_size=patch_size,
-            temporal_patch_size=temporal_patch_size,
-            in_channels=in_channels,
-            embed_dim=hidden_size,
-        )
-
-        self.merger = Qwen2_5OmniPatchMerger(
-            dim=args.out_hidden_size,
-            context_dim=args.vision_hidden_size,
-            spatial_merge_size=args.spatial_merge_size,
-        )
+        self.merger = Qwen2_5OmniPatchMerger(args)
 
     def __call__(self, x):
         # Simplified implementation
@@ -525,43 +680,41 @@ class Qwen2_5OmniVisionEncoder(nn.Module):
 
 
 class Qwen2_5_ThinkerModel(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: ThinkerConfigArgs):
         super().__init__()
 
-        # NM: fix
-        thinker_vocab_size = 151936
-        hidden_size = 2048
-        num_attention_heads = 16
-        num_key_value_heads = 2
-        head_dim = 128
-        intermediate_size = args.thinker_intermediate_size
+        hidden_size = args.text_config.hidden_size
+        intermediate_size = args.text_config.intermediate_size
+        head_dim = hidden_size // args.text_config.num_attention_heads
 
-        self.embed_tokens = nn.Embedding(thinker_vocab_size, args.thinker_hidden_size)
+        self.embed_tokens = nn.Embedding(args.text_config.vocab_size, hidden_size)
         self.layers = [
             Qwen2_5OmniDecoderLayer(
                 args,
                 layer_idx=layer_idx,
                 hidden_size=hidden_size,
-                num_attention_heads=num_attention_heads,
-                num_key_value_heads=num_key_value_heads,
+                num_attention_heads=args.text_config.num_attention_heads,
+                num_key_value_heads=args.text_config.num_key_value_heads,
                 head_dim=head_dim,
                 intermediate_size=intermediate_size,
             )
-            for layer_idx in range(args.thinker_num_hidden_layers)
+            for layer_idx in range(args.text_config.num_hidden_layers)
         ]
-        self.norm = nn.RMSNorm(args.thinker_hidden_size, eps=args.rms_norm_eps)
+        self.norm = nn.RMSNorm(hidden_size, eps=args.text_config.rms_norm_eps)
 
     def __call__(self, inputs, mask=None, cache=None):
         return inputs
 
 
 class Qwen2_5_Thinker(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: ThinkerConfigArgs):
         super().__init__()
         self.model = Qwen2_5_ThinkerModel(args)
         self.audio_tower = Qwen2_5OmniAudioEncoder(args)
         self.visual = Qwen2_5OmniVisionEncoder(args)
-        self.lm_head = nn.Linear(args.thinker_hidden_size, args.vocab_size, bias=False)
+        self.lm_head = nn.Linear(
+            args.text_config.hidden_size, args.text_config.vocab_size, bias=False
+        )
 
     def __call__(
         self, inputs, mask=None, cache=None, audio_input=None, visual_input=None
@@ -770,60 +923,52 @@ class AMPBlock(nn.Module):
 
 
 class Qwen2_5OmniToken2WavBigVGANModel(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: Token2WavConfigArgs):
         super().__init__()
 
-        # NM: fix
-        resblock_kernel_sizes = [3, 7, 11]
-        upsample_rates = [5, 3, 2, 2, 2, 2]
-        mel_dim = 80
-        upsample_initial_channel = 1536
-        upsample_rates = [5, 3, 2, 2, 2, 2]
-        upsample_kernel_sizes = [11, 7, 4, 4, 4, 4]
-        resblock_dilation_sizes = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
-
-        self.num_residual_blocks = len(resblock_kernel_sizes)
-        self.num_upsample_layers = len(upsample_rates)
+        cfg = args.bigvgan_config
+        self.num_residual_blocks = len(cfg.resblock_kernel_sizes)
+        self.num_upsample_layers = len(cfg.upsample_rates)
 
         self.conv_pre = Conv1dReshaped(
-            mel_dim, upsample_initial_channel, 7, 1, padding=3
+            cfg.mel_dim, cfg.upsample_initial_channel, 7, 1, padding=3
         )
 
-        # Removing extra ModuleList breaks official state dict
         self.ups = [
             [
                 ConvTranspose1dReshaped(
-                    upsample_initial_channel // (2**layer_idx),
-                    upsample_initial_channel // (2 ** (layer_idx + 1)),
+                    cfg.upsample_initial_channel // (2**layer_idx),
+                    cfg.upsample_initial_channel // (2 ** (layer_idx + 1)),
                     kernel_size,
                     stride,
                     padding=(kernel_size - stride) // 2,
                 )
             ]
             for layer_idx, (stride, kernel_size) in enumerate(
-                zip(upsample_rates, upsample_kernel_sizes)
+                zip(cfg.upsample_rates, cfg.upsample_kernel_sizes)
             )
         ]
 
         self.resblocks = [
             AMPBlock(
-                upsample_initial_channel // (2 ** (layer_idx + 1)),
+                cfg.upsample_initial_channel // (2 ** (layer_idx + 1)),
                 kernel_size,
                 dilation,
             )
             for layer_idx in range(self.num_upsample_layers)
             for kernel_size, dilation in zip(
-                resblock_kernel_sizes, resblock_dilation_sizes
+                cfg.resblock_kernel_sizes, cfg.resblock_dilation_sizes
             )
         ]
 
+        post_channel_size = cfg.upsample_initial_channel // (
+            2**self.num_upsample_layers
+        )
         self.activation_post = TorchActivation1d(
-            activation=SnakeBeta(
-                upsample_initial_channel // (2**self.num_upsample_layers)
-            )
+            activation=SnakeBeta(post_channel_size)
         )
         self.conv_post = Conv1dReshaped(
-            upsample_initial_channel // (2**self.num_upsample_layers),
+            post_channel_size,
             1,
             7,
             1,
@@ -846,27 +991,22 @@ class DiTMLP(nn.Module):
 
 
 class DiTAttention(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: Token2WavConfigArgs):
         super().__init__()
 
-        # NM: fix
-        hidden_size = 1024
-        num_attention_heads = 16
-        head_dim = 64
-        dropout = 0.1
-
-        self.dim = hidden_size
-        self.heads = num_attention_heads
-        self.inner_dim = head_dim * num_attention_heads
-        self.dropout = dropout
-        # self._attn_implementation = config._attn_implementation
+        cfg = args.dit_config
+        self.dim = cfg.dim
+        self.heads = cfg.heads
+        self.inner_dim = cfg.head_dim * cfg.heads
+        self.dropout = cfg.dropout
+        # self._attn_implementation = config._attn_implementation # If needed
         self.is_causal = False
 
-        self.to_q = nn.Linear(hidden_size, self.inner_dim)
-        self.to_k = nn.Linear(hidden_size, self.inner_dim)
-        self.to_v = nn.Linear(hidden_size, self.inner_dim)
+        self.to_q = nn.Linear(self.dim, self.inner_dim)
+        self.to_k = nn.Linear(self.dim, self.inner_dim)
+        self.to_v = nn.Linear(self.dim, self.inner_dim)
 
-        self.to_out = [nn.Linear(self.inner_dim, hidden_size), nn.Dropout(dropout)]
+        self.to_out = [nn.Linear(self.inner_dim, self.dim), nn.Dropout(self.dropout)]
 
 
 class Qwen2_5_OmniAdaLayerNormZero(nn.Module):
@@ -879,11 +1019,13 @@ class Qwen2_5_OmniAdaLayerNormZero(nn.Module):
 
 
 class DiTDecoderLayer(nn.Module):
-    def __init__(self, args: ModelArgs, look_ahead_block=0, look_backward_block=0):
+    def __init__(
+        self, args: Token2WavConfigArgs, look_ahead_block=0, look_backward_block=0
+    ):
         super().__init__()
 
-        # NM: fix this
-        hidden_size = 1024
+        cfg = args.dit_config
+        hidden_size = cfg.dim
 
         self.attn_norm = Qwen2_5_OmniAdaLayerNormZero(hidden_size)
 
@@ -891,9 +1033,7 @@ class DiTDecoderLayer(nn.Module):
         self.look_ahead_block = look_ahead_block
         self.look_backward_block = look_backward_block
         self.ff_norm = nn.LayerNorm(hidden_size, affine=False, eps=1e-6)
-        self.ff = DiTMLP(
-            dim=hidden_size, mult=args.dit_ff_mult, dropout=args.dit_dropout
-        )
+        self.ff = DiTMLP(dim=hidden_size, mult=cfg.ff_mult, dropout=cfg.dropout)
 
 
 # time step conditioning embedding
@@ -1031,18 +1171,18 @@ class ECAPA_TimeDelayNet(nn.Module):
     TDNN Based Speaker Verification" (https://arxiv.org/abs/2005.07143).
     """
 
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: Token2WavConfigArgs):
         super().__init__()
 
-        # NM: fix
-        enc_channels = [256, 256, 256, 256, 768]
-        enc_kernel_sizes = [5, 3, 3, 3, 1]
-        enc_dilations = [1, 2, 3, 4, 1]
-        mel_dim = 80
-        enc_res2net_scale = 2
-        enc_se_channels = 64
-        enc_attention_channels = 64
-        enc_dim = 128
+        cfg = args.dit_config
+        enc_channels = cfg.enc_channels
+        enc_kernel_sizes = cfg.enc_kernel_sizes
+        enc_dilations = cfg.enc_dilations
+        mel_dim = cfg.mel_dim
+        enc_res2net_scale = cfg.enc_res2net_scale
+        enc_se_channels = cfg.enc_se_channels
+        enc_attention_channels = cfg.enc_attention_channels
+        enc_dim = cfg.enc_dim
 
         if len(enc_channels) != len(enc_kernel_sizes) or len(enc_channels) != len(
             enc_dilations
@@ -1101,19 +1241,13 @@ class ECAPA_TimeDelayNet(nn.Module):
 
 
 class DiTInputEmbedding(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: Token2WavConfigArgs):
         super().__init__()
 
-        # NM: fix this
-        mel_dim = 80
-        enc_dim = 128
-        enc_emb_dim = 192
-        emb_dim = 512
-        hidden_size = 1024
-
+        cfg = args.dit_config
         self.proj = nn.Linear(
-            mel_dim + enc_dim + enc_emb_dim + emb_dim,
-            hidden_size,
+            cfg.mel_dim + cfg.enc_dim + cfg.enc_emb_dim + cfg.emb_dim,
+            cfg.dim,
         )
         self.spk_encoder = ECAPA_TimeDelayNet(args)
 
@@ -1137,37 +1271,32 @@ class Qwen2_5_OmniAdaLayerNormZero_Final(nn.Module):
 
 
 class Code2WavDITModel(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: Token2WavConfigArgs):  # Expect Token2WavConfigArgs
         super().__init__()
 
-        # NM: Fix this
-        num_hidden_layers = 22
-        hidden_size = 1024
-        num_embeds = 8193
-        emd_dim = 512
-        repeats = 2
-        mel_dim = 80
+        # Use parameters from args.dit_config
+        cfg = args.dit_config
+        hidden_size = cfg.dim
 
         self.input_embed = DiTInputEmbedding(args)
 
-        self.text_embed = DiTCodecEmbedding(num_embeds, emd_dim, repeats)
+        self.text_embed = DiTCodecEmbedding(cfg.num_embeds, cfg.emb_dim, cfg.repeats)
 
         self.time_embed = DiTTimestepEmbedding(hidden_size)
 
-        self.rotary_embed = nn.Module()
+        self.rotary_embed = nn.Module()  # Placeholder
 
-        self.transformer_blocks = []
-        for i in range(num_hidden_layers):
-            self.transformer_blocks.append(
-                DiTDecoderLayer(
-                    args,
-                    look_ahead_block=1 if i in args.look_ahead_layers else 0,
-                    look_backward_block=1 if i in args.look_backward_layers else 0,
-                )
+        self.transformer_blocks = [
+            DiTDecoderLayer(
+                args,
+                look_ahead_block=1 if i in cfg.look_ahead_layers else 0,
+                look_backward_block=1 if i in cfg.look_backward_layers else 0,
             )
+            for i in range(cfg.depth)
+        ]
 
         self.norm_out = Qwen2_5_OmniAdaLayerNormZero_Final(hidden_size)
-        self.proj_out = nn.Linear(hidden_size, mel_dim)
+        self.proj_out = nn.Linear(hidden_size, cfg.mel_dim)
 
     def __call__(self, x):
         # Simplified implementation
@@ -1175,7 +1304,7 @@ class Code2WavDITModel(nn.Module):
 
 
 class Qwen2_5_Token2wav(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: Token2WavConfigArgs):
         super().__init__()
         self.code2wav_bigvgan_model = Qwen2_5OmniToken2WavBigVGANModel(args)
         self.code2wav_dit_model = Code2WavDITModel(args)
@@ -1190,9 +1319,9 @@ class Model(nn.Module):
         super().__init__()
         self.args = args
         self.model_type = args.model_type
-        self.talker = Qwen2_5_Talker(args)
-        self.thinker = Qwen2_5_Thinker(args)
-        self.token2wav = Qwen2_5_Token2wav(args)
+        self.talker = Qwen2_5_Talker(args.talker)
+        self.thinker = Qwen2_5_Thinker(args.thinker)
+        self.token2wav = Qwen2_5_Token2wav(args.token2wav)
 
     def __call__(
         self,
