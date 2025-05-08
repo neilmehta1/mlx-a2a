@@ -18,9 +18,9 @@ from mlx.utils import tree_flatten
 from mlx_lm.utils import (
     save_weights,
     get_model_path,
-    load_model,
     load_tokenizer,
 )
+from mlx_lm.utils import load_model as mlxlm_load_model
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 from transformers import PreTrainedTokenizer
 
@@ -71,21 +71,20 @@ def save(
 MODEL_CONVERSION_DTYPES = ["float16", "bfloat16", "float32"]
 
 
-def fetch_from_hub(
-    model_path: Path, lazy: bool = False
-) -> Tuple[nn.Module, dict, PreTrainedTokenizer]:
-    model, config = load_model(model_path, lazy)
-    tokenizer = load_tokenizer(
-        model_path, eos_token_ids=config.get("eos_token_id", None)
-    )
-    return model, config, tokenizer
+def load_model(model_path: Path, lazy: bool = False) -> Tuple[nn.Module, dict]:
+    """
+    Load a model with support for mlx_a2a models.
 
+    This function ensures that models from mlx_a2a.models are properly registered
+    in the mlx_lm.models namespace before loading the model.
 
-def convert(
-    hf_path: str,
-    mlx_path: str = "mlx_model",
-    revision: Optional[str] = None,
-):
+    Args:
+        model_path (Path): Path to the model directory
+        lazy (bool, optional): Whether to load the model lazily. Defaults to False.
+
+    Returns:
+        Tuple[nn.Module, dict]: The loaded model and its configuration
+    """
     # Dynamically register models from mlx_a2a.models into mlx_lm.models namespace
     custom_models_path = Path(__file__).parent / "models"
     for module_info in pkgutil.iter_modules([str(custom_models_path)]):
@@ -101,6 +100,25 @@ def convert(
                     f"Could not import custom model {custom_module_name}: {e}"
                 )
 
+    # Now load the model using mlx_lm's load_model
+    return mlxlm_load_model(model_path, lazy)
+
+
+def fetch_from_hub(
+    model_path: Path, lazy: bool = False
+) -> Tuple[nn.Module, dict, PreTrainedTokenizer]:
+    model, config = load_model(model_path, lazy)
+    tokenizer = load_tokenizer(
+        model_path, eos_token_ids=config.get("eos_token_id", None)
+    )
+    return model, config, tokenizer
+
+
+def convert(
+    hf_path: str,
+    mlx_path: str = "mlx_model",
+    revision: Optional[str] = None,
+):
     # Check the save path is empty
     if isinstance(mlx_path, str):
         mlx_path = Path(mlx_path)

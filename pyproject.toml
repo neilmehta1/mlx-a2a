@@ -13,3 +13,18 @@ dependencies = [
 
 [project.scripts]
 convert = "mlx_a2a.convert:main"
+
+[tool.setuptools]
+py-modules = ["mlx_a2a"]
+
+[tool.uv.sources]
+transformers = { path = "transformers", editable = true }
+
+[dependency-groups]
+dev = [
+    "librosa>=0.11.0",
+    "parameterized>=0.9.0",
+    "pillow>=11.2.1",
+    "pytest>=8.3.5",
+    "torch>=2.7.0",
+]

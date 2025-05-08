@@ -1,0 +1,9 @@
+{
+  "none_inputs": {
+    "video_grid_thw": null,
+    "second_per_grids": null
+  },
+  "bool_inputs": {
+    "use_audio_in_video": false
+  }
+}
