@@ -69,6 +69,8 @@ class ThinkerConfigArgs:
     audio_start_token_id: int
     position_id_per_seconds: int
     seconds_per_chunk: int
+    audio_end_token_id: int
+    vision_end_token_id: int
 
     @classmethod
     def from_dict(cls, params: dict):
@@ -733,45 +735,31 @@ class Qwen2_5_Thinker(nn.Module):
         pass
 
     def get_llm_pos_ids_for_vision(
-        self, st_idx, vision_idx, spatial_merge_size, t_index, grid_hs, grid_ws
+        self,
+        start_idx: int,
+        vision_idx: int,
+        spatial_merge_size: int,
+        t_index: List[int],
+        grid_hs: List[int],
+        grid_ws: List[int],
     ):
-        """Helper function to get position IDs for vision."""
-        grid_h: int = int(grid_hs[vision_idx])
-        grid_w: int = int(grid_ws[vision_idx])
-
-        # Create position indices for each dimension
-        h_indices = mx.arange(grid_h // spatial_merge_size)
-        w_indices = mx.arange(grid_w // spatial_merge_size)
-
-        # Expand t_index to match the shape after broadcasting
-        t_expanded = mx.broadcast_to(
-            t_index.reshape(-1, 1, 1),
-            (t_index.shape[0], h_indices.shape[0], w_indices.shape[0]),
-        )
-
-        # Expand h_indices and w_indices
-        h_expanded = mx.broadcast_to(
-            h_indices.reshape(1, -1, 1),
-            (t_index.shape[0], h_indices.shape[0], w_indices.shape[0]),
-        )
-        w_expanded = mx.broadcast_to(
-            w_indices.reshape(1, 1, -1),
-            (t_index.shape[0], h_indices.shape[0], w_indices.shape[0]),
-        )
-
-        # Flatten the expanded tensors
-        t_flat = t_expanded.reshape(-1)
-        h_flat = h_expanded.reshape(-1)
-        w_flat = w_expanded.reshape(-1)
-
-        # Add st_idx to create the final position IDs
-        t_pos_ids = t_flat + st_idx
-        h_pos_ids = h_flat + st_idx
-        w_pos_ids = w_flat + st_idx
-
-        # Stack the position IDs
-        llm_pos_ids = mx.stack([t_pos_ids, h_pos_ids, w_pos_ids], axis=0)
-
+        llm_pos_ids_list = []
+        llm_grid_h = grid_hs[vision_idx] // spatial_merge_size
+        llm_grid_w = grid_ws[vision_idx] // spatial_merge_size
+        h_index = mx.arange(int(llm_grid_h)).reshape(1, -1, 1)
+        h_index = mx.repeat(h_index, repeats=len(t_index), axis=0)
+        h_index = mx.repeat(h_index, repeats=llm_grid_w, axis=2)
+        h_index = h_index.flatten()
+        w_index = mx.arange(int(llm_grid_w)).reshape(1, 1, -1)
+        w_index = mx.repeat(w_index, repeats=len(t_index), axis=0)
+        w_index = mx.repeat(w_index, repeats=llm_grid_h, axis=1)
+        w_index = w_index.flatten()
+        t_index = mx.array(t_index).reshape(-1, 1)
+        t_index = mx.repeat(t_index, repeats=llm_grid_h * llm_grid_w, axis=1).flatten().astype(mx.int64)
+        _llm_pos_ids = mx.stack([t_index, h_index, w_index])
+        llm_pos_ids_list.append(_llm_pos_ids + start_idx)
+        llm_pos_ids = mx.concatenate(llm_pos_ids_list, axis=1)
+        print(f"{llm_pos_ids=}")
         return llm_pos_ids
 
     def get_chunked_index(self, indices, chunk_size, st_idx):
@@ -1043,7 +1031,7 @@ class Qwen2_5_Thinker(nn.Module):
                         grid_ws = video_grid_thw[:, 2]
                         t_index = (
                             mx.arange(int(grid_t))
-                            * second_per_grids[video_idx].cpu().float()
+                            * second_per_grids[video_idx].float()
                             * position_id_per_seconds
                         ).astype(mx.int64)
                         llm_pos_ids = self.get_llm_pos_ids_for_vision(
@@ -1134,7 +1122,7 @@ class Qwen2_5_Thinker(nn.Module):
 
                         t_index = (
                             mx.arange(int(grid_t))
-                            * second_per_grids[video_idx].cpu().float()
+                            * second_per_grids[video_idx].astype(mx.float32)
                             * position_id_per_seconds
                         ).astype(mx.int64)
                         video_llm_pos_ids = self.get_llm_pos_ids_for_vision(

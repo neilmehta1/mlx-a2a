@@ -47,6 +47,17 @@ Return type
 array
 ```
 
+### EXAMPLE:
+TORCH:
+h_index = torch.arange(llm_grid_h).view(1, -1, 1).expand(len(t_index), -1, llm_grid_w).flatten()
+
+MLX:
+h_index = mx.arange(int(llm_grid_h)).reshape(1, -1, 1)
+h_index = mx.repeat(h_index, repeats=len(t_index), axis=0)
+h_index = mx.repeat(h_index, repeats=llm_grid_w, axis=2)
+h_index = h_index.flatten()
+
+
 ## LESSON:
 torch.arange(text_len) --> mx.arange(int(text_len))
 
@@ -55,3 +66,9 @@ torch.cat(llm_pos_ids_list, dim=1) --> mx.concatenate(llm_pos_ids_list, axis=1)
 
 ## LESSON:
 ARRAY.unsqueeze(X) --> mx.expand_dims(ARRAY, X)
+
+## LESSON:
+ARRAY.float() --> ARRAY.astype(mx.float32)
+
+## LESSON:
+torch.empty((X, Y), dtype=torch.int64) --> mx.random.randint(-1000000000, 1000000000, (X, Y), dtype=mx.int64)
