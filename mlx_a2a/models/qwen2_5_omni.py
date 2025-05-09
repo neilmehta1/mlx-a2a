@@ -62,6 +62,13 @@ class ThinkerConfigArgs:
     text_config: ThinkerTextConfigArgs
     audio_config: ThinkerAudioConfigArgs
     vision_config: ThinkerVisionConfigArgs
+    audio_token_index: int
+    image_token_index: int
+    video_token_index: int
+    vision_start_token_id: int
+    audio_start_token_id: int
+    position_id_per_seconds: int
+    seconds_per_chunk: int
 
     @classmethod
     def from_dict(cls, params: dict):
@@ -717,19 +724,20 @@ class Qwen2_5_Thinker(nn.Module):
         self.lm_head = nn.Linear(
             args.text_config.hidden_size, args.text_config.vocab_size, bias=False
         )
+        self.args = args
 
     def __call__(
         self,
         inputs,
     ):
-        input_embeds = self.model.embed_tokens(inputs)
+        pass
 
     def get_llm_pos_ids_for_vision(
         self, st_idx, vision_idx, spatial_merge_size, t_index, grid_hs, grid_ws
     ):
         """Helper function to get position IDs for vision."""
-        grid_h = grid_hs[vision_idx]
-        grid_w = grid_ws[vision_idx]
+        grid_h: int = int(grid_hs[vision_idx])
+        grid_w: int = int(grid_ws[vision_idx])
 
         # Create position indices for each dimension
         h_indices = mx.arange(grid_h // spatial_merge_size)
@@ -788,140 +796,96 @@ class Qwen2_5_Thinker(nn.Module):
         audio_seqlens: Optional[mx.array] = None,
         second_per_grids: Optional[mx.array] = None,
     ) -> Tuple[mx.array, mx.array]:
-        """
-        Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
-
-        This is an MLX implementation of the PyTorch function with the same name.
-        """
-        # Define constants that would normally be in the config
-        image_token_id = 151857
-        video_token_id = 151858
-        audio_token_id = 151859
-        vision_start_token_id = 151860
-        audio_start_token_id = 151861
-        position_id_per_seconds = 25
-        seconds_per_chunk = 2
-
-        # Spatial merge size would normally be from the vision config
-        spatial_merge_size = 1
+        pass
+        spatial_merge_size = self.args.vision_config.spatial_merge_size
+        image_token_id = self.args.image_token_index
+        video_token_id = self.args.video_token_index
+        audio_token_id = self.args.audio_token_index
+        vision_start_token_id = self.args.vision_start_token_id
+        audio_start_token_id = self.args.audio_start_token_id
+        position_id_per_seconds = self.args.position_id_per_seconds
+        seconds_per_chunk = self.args.seconds_per_chunk
 
         mrope_position_deltas = []
-
         if input_ids is not None and (
             image_grid_thw is not None or video_grid_thw is not None
         ):
             total_input_ids = input_ids
             if attention_mask is None:
                 attention_mask = mx.ones_like(total_input_ids)
-
-            # Initialize position_ids with ones
             position_ids = mx.ones(
-                (3, input_ids.shape[0], input_ids.shape[1]), dtype=input_ids.dtype
+                [3, input_ids.shape[0], input_ids.shape[1]], dtype=mx.uint32
             )
-
             image_idx, video_idx, audio_idx = 0, 0, 0
-
-            # Process each batch item
-            for i in range(total_input_ids.shape[0]):
-                # Get the input_ids for this batch item where attention_mask is 1
-                # batch_input_ids = total_input_ids[i][attention_mask[i] == 1]
-                batch_input_ids = total_input_ids[i][
-                    np.where(attention_mask[i] == 1)[0].tolist()
+            for i, input_ids in enumerate(total_input_ids):
+                input_ids = input_ids[
+                    mx.array(
+                        np.where(np.array(attention_mask[i]) == 1)[0],
+                        dtype=input_ids.dtype,
+                    )
                 ]
-
-                # Count the number of each token type
-                # Find indices where vision_start_token_id appears
-                vision_start_indices = mx.argwhere(
-                    batch_input_ids == vision_start_token_id
-                ).squeeze(1)
-
-                # Get the tokens that follow vision_start_token_id
-                if vision_start_indices.size > 0:
-                    # Add 1 to each index to get the token after vision_start_token_id
-                    vision_token_indices = vision_start_indices + 1
-                    # Filter indices that are within bounds
-                    valid_indices = vision_token_indices < batch_input_ids.shape[0]
-                    vision_token_indices = vision_token_indices[valid_indices]
-                    # Get the actual tokens
-                    vision_tokens = batch_input_ids[vision_token_indices]
-                else:
-                    vision_tokens = mx.array([], dtype=batch_input_ids.dtype)
-
-                # Count occurrences of each token type
-                audio_nums = mx.sum(batch_input_ids == audio_start_token_id)
+                image_nums, video_nums, audio_nums = 0, 0, 0
+                vision_start_indices = mx.array(
+                    np.where(input_ids == vision_start_token_id)[0],
+                    dtype=input_ids.dtype,
+                )
+                vision_tokens = input_ids[vision_start_indices + 1]
+                audio_nums = mx.sum(input_ids == audio_start_token_id)
                 image_nums = mx.sum(vision_tokens == image_token_id)
-
-                if use_audio_in_video:
-                    video_nums = mx.sum(vision_tokens == audio_start_token_id)
-                else:
-                    video_nums = mx.sum(vision_tokens == video_token_id)
-
-                # Convert to Python list for easier processing
-                input_tokens = batch_input_ids.tolist()
-
-                # Initialize list to store position IDs
-                llm_pos_ids_list = []
-
-                # Starting position in the input tokens
+                video_nums = (
+                    mx.sum(vision_tokens == audio_start_token_id)
+                    if use_audio_in_video
+                    else mx.sum(vision_tokens == video_token_id)
+                )
+                input_tokens = input_ids.tolist()
+                llm_pos_ids_list: list = []
                 st = 0
-
-                # Remaining counts of each token type
-                remain_images = image_nums
-                remain_videos = video_nums
-                remain_audios = audio_nums
-
-                # Total number of multimodal elements
-                if use_audio_in_video:
-                    multimodal_nums = image_nums + audio_nums
-                else:
-                    multimodal_nums = image_nums + video_nums + audio_nums
-
-                # Process each multimodal element
-                for _ in range(multimodal_nums):
-                    # Get the starting index for position IDs
+                remain_images, remain_videos, remain_audios = (
+                    image_nums,
+                    video_nums,
+                    audio_nums,
+                )
+                multimodal_nums = (
+                    image_nums + audio_nums
+                    if use_audio_in_video
+                    else image_nums + video_nums + audio_nums
+                )
+                for _ in range(int(multimodal_nums)):
                     st_idx = (
                         llm_pos_ids_list[-1].max() + 1
                         if len(llm_pos_ids_list) > 0
                         else 0
                     )
-
-                    # Find the next occurrence of each token type
-                    if image_token_id in input_tokens[st:] and remain_images > 0:
-                        ed_image = input_tokens.index(image_token_id, st)
+                    if image_token_id in input_tokens and remain_images > 0:
+                        ed_image = input_tokens.index(image_token_id, int(st))
                     else:
                         ed_image = len(input_tokens) + 1
-
-                    if video_token_id in input_tokens[st:] and remain_videos > 0:
-                        ed_video = input_tokens.index(video_token_id, st)
+                    if video_token_id in input_tokens and remain_videos > 0:
+                        ed_video = input_tokens.index(video_token_id, int(st))
                     else:
                         ed_video = len(input_tokens) + 1
-
-                    if audio_token_id in input_tokens[st:] and remain_audios > 0:
-                        ed_audio = input_tokens.index(audio_token_id, st)
+                    if audio_token_id in input_tokens and remain_audios > 0:
+                        ed_audio = input_tokens.index(audio_token_id, int(st))
                     else:
                         ed_audio = len(input_tokens) + 1
-
-                    # Find the earliest occurrence
                     min_ed = min(ed_image, ed_video, ed_audio)
-
-                    # Process based on which token type occurs first
-                    if min_ed == ed_image:
-                        # Process text before the image
+                    if min_ed == ed_audio:
                         text_len = min_ed - st - 1
-                        if text_len > 0:
+                        if text_len != 0:
                             st_idx = (
                                 llm_pos_ids_list[-1].max() + 1
                                 if len(llm_pos_ids_list) > 0
                                 else 0
                             )
                             llm_pos_ids_list.append(
-                                mx.broadcast_to(
-                                    mx.arange(text_len).reshape(1, -1), (3, text_len)
+                                mx.repeat(
+                                    mx.arange(text_len).reshape(1, -1),
+                                    repeats=3,
+                                    axis=0,
                                 )
                                 + st_idx
                             )
 
-                        # Process the image token
                         st_idx = (
                             llm_pos_ids_list[-1].max() + 1
                             if len(llm_pos_ids_list) > 0
@@ -929,13 +893,76 @@ class Qwen2_5_Thinker(nn.Module):
                         )
                         bos_len = 1
                         llm_pos_ids_list.append(
-                            mx.broadcast_to(
-                                mx.arange(bos_len).reshape(1, -1), (3, bos_len)
+                            mx.repeat(
+                                mx.arange(bos_len).reshape(1, -1), repeats=3, axis=0
                             )
                             + st_idx
                         )
 
-                        # Process the image content
+                        st_idx = (
+                            llm_pos_ids_list[-1].max() + 1
+                            if len(llm_pos_ids_list) > 0
+                            else 0
+                        )
+                        audio_len = (
+                            (audio_seqlens[audio_idx] - 1) // 2 + 1 - 2
+                        ) // 2 + 1
+                        llm_pos_ids = (
+                            mx.repeat(
+                                mx.arange(int(audio_len)).reshape(1, -1),
+                                repeats=3,
+                                axis=0,
+                            )
+                            + st_idx
+                        )
+                        llm_pos_ids_list.append(llm_pos_ids)
+
+                        st_idx = (
+                            llm_pos_ids_list[-1].max() + 1
+                            if len(llm_pos_ids_list) > 0
+                            else 0
+                        )
+                        eos_len = 1
+                        llm_pos_ids_list.append(
+                            mx.repeat(
+                                mx.arange(eos_len).reshape(1, -1), repeats=3, axis=0
+                            )
+                            + st_idx
+                        )
+
+                        st += text_len + bos_len + audio_len + eos_len
+                        audio_idx += 1
+                        remain_audios -= 1
+                    elif min_ed == ed_image:
+                        text_len = min_ed - st - 1
+                        if text_len != 0:
+                            st_idx = (
+                                llm_pos_ids_list[-1].max() + 1
+                                if len(llm_pos_ids_list) > 0
+                                else 0
+                            )
+                            llm_pos_ids_list.append(
+                                mx.repeat(
+                                    mx.arange(int(text_len)).reshape(1, -1),
+                                    repeats=3,
+                                    axis=0,
+                                )
+                                + st_idx
+                            )
+
+                        st_idx = (
+                            llm_pos_ids_list[-1].max() + 1
+                            if len(llm_pos_ids_list) > 0
+                            else 0
+                        )
+                        bos_len = 1
+                        llm_pos_ids_list.append(
+                            mx.repeat(
+                                mx.arange(bos_len).reshape(1, -1), repeats=3, axis=0
+                            )
+                            + st_idx
+                        )
+
                         st_idx = (
                             llm_pos_ids_list[-1].max() + 1
                             if len(llm_pos_ids_list) > 0
@@ -945,8 +972,8 @@ class Qwen2_5_Thinker(nn.Module):
                         grid_hs = image_grid_thw[:, 1]
                         grid_ws = image_grid_thw[:, 2]
                         t_index = (
-                            mx.arange(grid_t) * 1 * position_id_per_seconds
-                        ).astype(mx.int32)
+                            mx.arange(int(grid_t)) * 1 * position_id_per_seconds
+                        ).astype(mx.int64)
                         llm_pos_ids = self.get_llm_pos_ids_for_vision(
                             st_idx,
                             image_idx,
@@ -955,12 +982,11 @@ class Qwen2_5_Thinker(nn.Module):
                             grid_hs,
                             grid_ws,
                         )
-                        image_len = mx.prod(image_grid_thw[image_idx]) // (
+                        image_len = image_grid_thw[image_idx].prod() // (
                             spatial_merge_size**2
                         )
                         llm_pos_ids_list.append(llm_pos_ids)
 
-                        # Process the end token
                         st_idx = (
                             llm_pos_ids_list[-1].max() + 1
                             if len(llm_pos_ids_list) > 0
@@ -968,18 +994,229 @@ class Qwen2_5_Thinker(nn.Module):
                         )
                         eos_len = 1
                         llm_pos_ids_list.append(
-                            mx.broadcast_to(
-                                mx.arange(eos_len).reshape(1, -1), (3, eos_len)
+                            mx.repeat(
+                                mx.arange(eos_len).reshape(1, -1), repeats=3, axis=0
                             )
                             + st_idx
                         )
 
-                        # Update position and counters
                         st += text_len + bos_len + image_len + eos_len
                         image_idx += 1
                         remain_images -= 1
+                    elif min_ed == ed_video and not use_audio_in_video:
+                        text_len = min_ed - st - 1
+                        if text_len != 0:
+                            st_idx = (
+                                llm_pos_ids_list[-1].max() + 1
+                                if len(llm_pos_ids_list) > 0
+                                else 0
+                            )
+                            llm_pos_ids_list.append(
+                                mx.repeat(
+                                    mx.arange(int(text_len)).reshape(1, -1),
+                                    repeats=3,
+                                    axis=0,
+                                )
+                                + st_idx
+                            )
 
-                # Process any remaining text
+                        st_idx = (
+                            llm_pos_ids_list[-1].max() + 1
+                            if len(llm_pos_ids_list) > 0
+                            else 0
+                        )
+                        bos_len = 1
+                        llm_pos_ids_list.append(
+                            mx.repeat(
+                                mx.arange(bos_len).reshape(1, -1), repeats=3, axis=0
+                            )
+                            + st_idx
+                        )
+
+                        st_idx = (
+                            llm_pos_ids_list[-1].max() + 1
+                            if len(llm_pos_ids_list) > 0
+                            else 0
+                        )
+                        grid_t = video_grid_thw[video_idx][0]
+                        grid_hs = video_grid_thw[:, 1]
+                        grid_ws = video_grid_thw[:, 2]
+                        t_index = (
+                            mx.arange(int(grid_t))
+                            * second_per_grids[video_idx].cpu().float()
+                            * position_id_per_seconds
+                        ).astype(mx.int64)
+                        llm_pos_ids = self.get_llm_pos_ids_for_vision(
+                            st_idx,
+                            video_idx,
+                            spatial_merge_size,
+                            t_index,
+                            grid_hs,
+                            grid_ws,
+                        )
+                        video_len = video_grid_thw[video_idx].prod() // (
+                            spatial_merge_size**2
+                        )
+                        llm_pos_ids_list.append(llm_pos_ids)
+
+                        st_idx = (
+                            llm_pos_ids_list[-1].max() + 1
+                            if len(llm_pos_ids_list) > 0
+                            else 0
+                        )
+                        eos_len = 1
+                        llm_pos_ids_list.append(
+                            mx.repeat(
+                                mx.arange(eos_len).reshape(1, -1), repeats=3, axis=0
+                            )
+                            + st_idx
+                        )
+
+                        st += text_len + bos_len + video_len + eos_len
+                        video_idx += 1
+                        remain_videos -= 1
+
+                    elif min_ed == ed_video and use_audio_in_video:
+                        text_len = min_ed - st - 2
+                        if text_len != 0:
+                            st_idx = (
+                                llm_pos_ids_list[-1].max() + 1
+                                if len(llm_pos_ids_list) > 0
+                                else 0
+                            )
+                            llm_pos_ids_list.append(
+                                mx.repeat(
+                                    mx.arange(int(text_len)).reshape(1, -1),
+                                    repeats=3,
+                                    axis=0,
+                                )
+                                + st_idx
+                            )
+
+                        st_idx = (
+                            llm_pos_ids_list[-1].max() + 1
+                            if len(llm_pos_ids_list) > 0
+                            else 0
+                        )
+                        bos_len = 1
+                        llm_pos_ids_list.append(
+                            mx.repeat(
+                                mx.arange(bos_len).reshape(1, -1), repeats=3, axis=0
+                            )
+                            + st_idx
+                        )
+                        llm_pos_ids_list.append(
+                            mx.repeat(
+                                mx.arange(bos_len).reshape(1, -1), repeats=3, axis=0
+                            )
+                            + st_idx
+                        )
+
+                        st_idx = (
+                            llm_pos_ids_list[-1].max() + 1
+                            if len(llm_pos_ids_list) > 0
+                            else 0
+                        )
+                        audio_len = (
+                            (audio_seqlens[audio_idx] - 1) // 2 + 1 - 2
+                        ) // 2 + 1
+                        audio_llm_pos_ids = (
+                            mx.repeat(
+                                mx.arange(int(audio_len)).reshape(1, -1),
+                                repeats=3,
+                                axis=0,
+                            )
+                            + st_idx
+                        )
+                        grid_t = video_grid_thw[video_idx][0]
+                        grid_hs = video_grid_thw[:, 1]
+                        grid_ws = video_grid_thw[:, 2]
+
+                        t_index = (
+                            mx.arange(int(grid_t))
+                            * second_per_grids[video_idx].cpu().float()
+                            * position_id_per_seconds
+                        ).astype(mx.int64)
+                        video_llm_pos_ids = self.get_llm_pos_ids_for_vision(
+                            st_idx,
+                            video_idx,
+                            spatial_merge_size,
+                            t_index,
+                            grid_hs,
+                            grid_ws,
+                        )
+
+                        t_ntoken_per_chunk = int(
+                            position_id_per_seconds * seconds_per_chunk
+                        )
+                        video_chunk_indexes = self.get_chunked_index(
+                            video_llm_pos_ids[0], t_ntoken_per_chunk, st_idx
+                        )
+                        audio_chunk_indexes = self.get_chunked_index(
+                            audio_llm_pos_ids[0], t_ntoken_per_chunk, st_idx
+                        )
+                        sub_len = 0
+                        for j in range(
+                            max(len(video_chunk_indexes), len(audio_chunk_indexes))
+                        ):
+                            video_chunk_index = (
+                                video_chunk_indexes[j]
+                                if j < len(video_chunk_indexes)
+                                else None
+                            )
+                            audio_chunk_index = (
+                                audio_chunk_indexes[j]
+                                if j < len(audio_chunk_indexes)
+                                else None
+                            )
+                            if video_chunk_index is not None:
+                                sub_len += video_chunk_index[1] - video_chunk_index[0]
+
+                                llm_pos_ids_list.append(
+                                    video_llm_pos_ids[
+                                        :, video_chunk_index[0] : video_chunk_index[1]
+                                    ]
+                                )
+                            if audio_chunk_index is not None:
+                                sub_len += audio_chunk_index[1] - audio_chunk_index[0]
+
+                                llm_pos_ids_list.append(
+                                    audio_llm_pos_ids[
+                                        :, audio_chunk_index[0] : audio_chunk_index[1]
+                                    ]
+                                )
+                        video_len = video_grid_thw[video_idx].prod() // (
+                            spatial_merge_size**2
+                        )
+
+                        st_idx = (
+                            llm_pos_ids_list[-1].max() + 1
+                            if len(llm_pos_ids_list) > 0
+                            else 0
+                        )
+                        eos_len = 1
+                        llm_pos_ids_list.append(
+                            mx.repeat(
+                                mx.arange(eos_len).reshape(1, -1), repeats=3, axis=0
+                            )
+                            + st_idx
+                        )
+                        llm_pos_ids_list.append(
+                            mx.repeat(
+                                mx.arange(eos_len).reshape(1, -1), repeats=3, axis=0
+                            )
+                            + st_idx
+                        )
+
+                        st += (
+                            text_len + bos_len * 2 + audio_len + video_len + eos_len * 2
+                        )
+
+                        audio_idx += 1
+                        video_idx += 1
+                        remain_videos -= 1
+                        remain_audios -= 1
+
                 if st < len(input_tokens):
                     st_idx = (
                         llm_pos_ids_list[-1].max() + 1
@@ -988,45 +1225,283 @@ class Qwen2_5_Thinker(nn.Module):
                     )
                     text_len = len(input_tokens) - st
                     llm_pos_ids_list.append(
-                        mx.broadcast_to(
-                            mx.arange(text_len).reshape(1, -1), (3, text_len)
+                        mx.repeat(
+                            mx.arange(int(text_len)).reshape(1, -1), repeats=3, axis=0
                         )
                         + st_idx
                     )
 
-                # Concatenate all position IDs
-                llm_positions = mx.concatenate(llm_pos_ids_list, axis=1)
+                llm_positions = mx.concatenate(llm_pos_ids_list, axis=1).reshape(3, -1)
 
-                # Update the position_ids tensor
-                for j in range(3):
-                    for k in range(llm_positions.shape[1]):
-                        if k < attention_mask[i].sum():
-                            position_ids[j, i, k] = llm_positions[j, k]
-
-                # Calculate mrope_position_deltas
-                mrope_position_deltas.append(
-                    llm_positions.max() + 1 - batch_input_ids.shape[0]
-                )
-
-            # Convert mrope_position_deltas to tensor
-            mrope_position_deltas = mx.array(
-                mrope_position_deltas, dtype=input_ids.dtype
-            ).reshape(-1, 1)
+                position_ids[
+                    ..., i, np.where(np.array(attention_mask[i]) == 1)[0].tolist()
+                ] = llm_positions
+                mrope_position_deltas.append(llm_positions.max() + 1 - len(input_ids))
+            mrope_position_deltas = mx.expand_dims(mx.array(mrope_position_deltas), 1)
 
             return position_ids, mrope_position_deltas
         else:
-            # For text-only input
-            position_ids = mx.cumsum(attention_mask, axis=-1) - 1
-            position_ids = mx.where(attention_mask == 0, 1, position_ids)
-            position_ids = position_ids.reshape(1, *position_ids.shape).broadcast_to(
-                3, -1, -1
-            )
-            max_position_ids = mx.max(position_ids, axis=(0, 2), keepdims=True)
+            position_ids = attention_mask.astype(mx.int64).cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            position_ids = mx.repeat(mx.expand_dims(position_ids, 0), repeats=3, axis=0)
+            max_position_ids = position_ids.max(0, keepdim=False)[0].max(
+                -1, keepdim=True
+            )[0]
             mrope_position_deltas = (
-                max_position_ids + 1 - mx.sum(attention_mask, axis=-1, keepdims=True)
+                max_position_ids + 1 - mx.sum(attention_mask, dim=-1, keepdim=True)
             )
 
             return position_ids, mrope_position_deltas
+
+    # def get_rope_index(
+    #     self,
+    #     input_ids: Optional[mx.array] = None,
+    #     image_grid_thw: Optional[mx.array] = None,
+    #     video_grid_thw: Optional[mx.array] = None,
+    #     attention_mask: Optional[mx.array] = None,
+    #     use_audio_in_video: bool = False,
+    #     audio_seqlens: Optional[mx.array] = None,
+    #     second_per_grids: Optional[mx.array] = None,
+    # ) -> Tuple[mx.array, mx.array]:
+    #     """
+    #     Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
+
+    #     This is an MLX implementation of the PyTorch function with the same name.
+    #     """
+    #     # Define constants that would normally be in the config
+    #     image_token_id = 151857
+    #     video_token_id = 151858
+    #     audio_token_id = 151859
+    #     vision_start_token_id = 151860
+    #     audio_start_token_id = 151861
+    #     position_id_per_seconds = 25
+    #     seconds_per_chunk = 2
+
+    #     # Spatial merge size would normally be from the vision config
+    #     spatial_merge_size = 1
+
+    #     mrope_position_deltas = []
+
+    #     if input_ids is not None and (
+    #         image_grid_thw is not None or video_grid_thw is not None
+    #     ):
+    #         total_input_ids = input_ids
+    #         if attention_mask is None:
+    #             attention_mask = mx.ones_like(total_input_ids)
+
+    #         # Initialize position_ids with ones
+    #         position_ids = mx.ones(
+    #             (3, input_ids.shape[0], input_ids.shape[1]), dtype=input_ids.dtype
+    #         )
+
+    #         image_idx, video_idx, audio_idx = 0, 0, 0
+
+    #         # Process each batch item
+    #         for i in range(total_input_ids.shape[0]):
+    #             # Get the input_ids for this batch item where attention_mask is 1
+    #             # batch_input_ids = total_input_ids[i][attention_mask[i] == 1]
+    #             batch_input_ids = total_input_ids[i][
+    #                 np.where(attention_mask[i] == 1)[0].tolist()
+    #             ]
+
+    #             # Count the number of each token type
+    #             # Find indices where vision_start_token_id appears
+    #             vision_start_indices = mx.argwhere(
+    #                 batch_input_ids == vision_start_token_id
+    #             ).squeeze(1)
+
+    #             # Get the tokens that follow vision_start_token_id
+    #             if vision_start_indices.size > 0:
+    #                 # Add 1 to each index to get the token after vision_start_token_id
+    #                 vision_token_indices = vision_start_indices + 1
+    #                 # Filter indices that are within bounds
+    #                 valid_indices = vision_token_indices < batch_input_ids.shape[0]
+    #                 vision_token_indices = vision_token_indices[valid_indices]
+    #                 # Get the actual tokens
+    #                 vision_tokens = batch_input_ids[vision_token_indices]
+    #             else:
+    #                 vision_tokens = mx.array([], dtype=batch_input_ids.dtype)
+
+    #             # Count occurrences of each token type
+    #             audio_nums = mx.sum(batch_input_ids == audio_start_token_id)
+    #             image_nums = mx.sum(vision_tokens == image_token_id)
+
+    #             if use_audio_in_video:
+    #                 video_nums = mx.sum(vision_tokens == audio_start_token_id)
+    #             else:
+    #                 video_nums = mx.sum(vision_tokens == video_token_id)
+
+    #             # Convert to Python list for easier processing
+    #             input_tokens = batch_input_ids.tolist()
+
+    #             # Initialize list to store position IDs
+    #             llm_pos_ids_list = []
+
+    #             # Starting position in the input tokens
+    #             st = 0
+
+    #             # Remaining counts of each token type
+    #             remain_images = image_nums
+    #             remain_videos = video_nums
+    #             remain_audios = audio_nums
+
+    #             # Total number of multimodal elements
+    #             if use_audio_in_video:
+    #                 multimodal_nums = image_nums + audio_nums
+    #             else:
+    #                 multimodal_nums = image_nums + video_nums + audio_nums
+
+    #             # Process each multimodal element
+    #             for _ in range(multimodal_nums):
+    #                 # Get the starting index for position IDs
+    #                 st_idx = (
+    #                     llm_pos_ids_list[-1].max() + 1
+    #                     if len(llm_pos_ids_list) > 0
+    #                     else 0
+    #                 )
+
+    #                 # Find the next occurrence of each token type
+    #                 if image_token_id in input_tokens[st:] and remain_images > 0:
+    #                     ed_image = input_tokens.index(image_token_id, st)
+    #                 else:
+    #                     ed_image = len(input_tokens) + 1
+
+    #                 if video_token_id in input_tokens[st:] and remain_videos > 0:
+    #                     ed_video = input_tokens.index(video_token_id, st)
+    #                 else:
+    #                     ed_video = len(input_tokens) + 1
+
+    #                 if audio_token_id in input_tokens[st:] and remain_audios > 0:
+    #                     ed_audio = input_tokens.index(audio_token_id, st)
+    #                 else:
+    #                     ed_audio = len(input_tokens) + 1
+
+    #                 # Find the earliest occurrence
+    #                 min_ed = min(ed_image, ed_video, ed_audio)
+
+    #                 # Process based on which token type occurs first
+    #                 if min_ed == ed_image:
+    #                     # Process text before the image
+    #                     text_len = min_ed - st - 1
+    #                     if text_len > 0:
+    #                         st_idx = (
+    #                             llm_pos_ids_list[-1].max() + 1
+    #                             if len(llm_pos_ids_list) > 0
+    #                             else 0
+    #                         )
+    #                         llm_pos_ids_list.append(
+    #                             mx.broadcast_to(
+    #                                 mx.arange(text_len).reshape(1, -1), (3, text_len)
+    #                             )
+    #                             + st_idx
+    #                         )
+
+    #                     # Process the image token
+    #                     st_idx = (
+    #                         llm_pos_ids_list[-1].max() + 1
+    #                         if len(llm_pos_ids_list) > 0
+    #                         else 0
+    #                     )
+    #                     bos_len = 1
+    #                     llm_pos_ids_list.append(
+    #                         mx.broadcast_to(
+    #                             mx.arange(bos_len).reshape(1, -1), (3, bos_len)
+    #                         )
+    #                         + st_idx
+    #                     )
+
+    #                     # Process the image content
+    #                     st_idx = (
+    #                         llm_pos_ids_list[-1].max() + 1
+    #                         if len(llm_pos_ids_list) > 0
+    #                         else 0
+    #                     )
+    #                     grid_t = image_grid_thw[image_idx][0]
+    #                     grid_hs = image_grid_thw[:, 1]
+    #                     grid_ws = image_grid_thw[:, 2]
+    #                     t_index = (
+    #                         mx.arange(grid_t) * 1 * position_id_per_seconds
+    #                     ).astype(mx.int32)
+    #                     llm_pos_ids = self.get_llm_pos_ids_for_vision(
+    #                         st_idx,
+    #                         image_idx,
+    #                         spatial_merge_size,
+    #                         t_index,
+    #                         grid_hs,
+    #                         grid_ws,
+    #                     )
+    #                     image_len = mx.prod(image_grid_thw[image_idx]) // (
+    #                         spatial_merge_size**2
+    #                     )
+    #                     llm_pos_ids_list.append(llm_pos_ids)
+
+    #                     # Process the end token
+    #                     st_idx = (
+    #                         llm_pos_ids_list[-1].max() + 1
+    #                         if len(llm_pos_ids_list) > 0
+    #                         else 0
+    #                     )
+    #                     eos_len = 1
+    #                     llm_pos_ids_list.append(
+    #                         mx.broadcast_to(
+    #                             mx.arange(eos_len).reshape(1, -1), (3, eos_len)
+    #                         )
+    #                         + st_idx
+    #                     )
+
+    #                     # Update position and counters
+    #                     st += text_len + bos_len + image_len + eos_len
+    #                     image_idx += 1
+    #                     remain_images -= 1
+
+    #             # Process any remaining text
+    #             if st < len(input_tokens):
+    #                 st_idx = (
+    #                     llm_pos_ids_list[-1].max() + 1
+    #                     if len(llm_pos_ids_list) > 0
+    #                     else 0
+    #                 )
+    #                 text_len = len(input_tokens) - st
+    #                 llm_pos_ids_list.append(
+    #                     mx.broadcast_to(
+    #                         mx.arange(text_len).reshape(1, -1), (3, text_len)
+    #                     )
+    #                     + st_idx
+    #                 )
+
+    #             # Concatenate all position IDs
+    #             llm_positions = mx.concatenate(llm_pos_ids_list, axis=1)
+
+    #             # Update the position_ids tensor
+    #             for j in range(3):
+    #                 for k in range(llm_positions.shape[1]):
+    #                     if k < attention_mask[i].sum():
+    #                         position_ids[j, i, k] = llm_positions[j, k]
+
+    #             # Calculate mrope_position_deltas
+    #             mrope_position_deltas.append(
+    #                 llm_positions.max() + 1 - batch_input_ids.shape[0]
+    #             )
+
+    #         # Convert mrope_position_deltas to tensor
+    #         mrope_position_deltas = mx.array(
+    #             mrope_position_deltas, dtype=input_ids.dtype
+    #         ).reshape(-1, 1)
+
+    #         return position_ids, mrope_position_deltas
+    #     else:
+    #         # For text-only input
+    #         position_ids = mx.cumsum(attention_mask, axis=-1) - 1
+    #         position_ids = mx.where(attention_mask == 0, 1, position_ids)
+    #         position_ids = position_ids.reshape(1, *position_ids.shape).broadcast_to(
+    #             3, -1, -1
+    #         )
+    #         max_position_ids = mx.max(position_ids, axis=(0, 2), keepdims=True)
+    #         mrope_position_deltas = (
+    #             max_position_ids + 1 - mx.sum(attention_mask, axis=-1, keepdims=True)
+    #         )
+
+    #         return position_ids, mrope_position_deltas
 
 
 class SnakeBeta(nn.Module):
