@@ -1,5 +1,5 @@
 import unittest
-import numpy as np
+import torch
 import mlx.core as mx
 import json
 from pathlib import Path
@@ -19,33 +19,68 @@ class TestQwen25Omni(unittest.TestCase):
         # Load the captured inputs and outputs
         func_name = "qwen2_5omnithinkerforconditionalgeneration_get_rope_index"
         dir_name = f"io_capture_{func_name}"
-        inputs = np.load(f"{dir_name}/inputs.npz")
-        outputs = np.load(f"{dir_name}/outputs.npz")
 
-        # Convert inputs to MLX arrays
-        input_ids = mx.array(inputs["input_ids"])
-        image_grid_thw = mx.array(inputs["image_grid_thw"])
-        attention_mask = mx.array(inputs["attention_mask"])
-        audio_seqlens = mx.array(inputs["audio_seqlens"])
+        inputs_data = torch.load(f"{dir_name}/inputs.pt")
+        outputs_data = torch.load(f"{dir_name}/outputs.pt")
 
-        # Load metadata for None and boolean inputs
+        # Load metadata
         with open(f"{dir_name}/input_metadata.json", "r") as f:
-            metadata = json.load(f)
+            input_meta = json.load(f)
+        with open(f"{dir_name}/output_metadata.json", "r") as f:
+            output_meta = json.load(f)
+
+        # Helper for conversion
+        def convert_tensor(tensor_key, torch_tensor, meta_dict_section):
+            dtype_str = meta_dict_section[tensor_key]["dtype"]
+            if dtype_str == "torch.bfloat16":
+                return mx.array(torch_tensor.float().numpy(), dtype=mx.bfloat16)
+            elif dtype_str == "torch.float16":
+                return mx.array(torch_tensor.numpy(), dtype=mx.float16)
+            elif dtype_str == "torch.float32":
+                return mx.array(torch_tensor.numpy(), dtype=mx.float32)
+            elif dtype_str == "torch.int64":
+                return mx.array(torch_tensor.numpy(), dtype=mx.int64)
+            elif dtype_str == "torch.int32":
+                return mx.array(torch_tensor.numpy(), dtype=mx.int32)
+            elif dtype_str == "torch.bool":
+                return mx.array(torch_tensor.numpy(), dtype=mx.bool_)
+            # Add other mappings as needed or a fallback
+            else:  # Fallback: let MLX infer, or convert to a common type like float32 if appropriate
+                # This might need adjustment based on actual dtypes encountered
+                return mx.array(torch_tensor.numpy())
+
+        # Convert inputs to MLX arrays using metadata
+        input_ids = convert_tensor(
+            "input_ids", inputs_data["input_ids"], input_meta["saved_pt_info"]
+        )
+        image_grid_thw = convert_tensor(
+            "image_grid_thw", inputs_data["image_grid_thw"], input_meta["saved_pt_info"]
+        )
+        attention_mask = convert_tensor(
+            "attention_mask", inputs_data["attention_mask"], input_meta["saved_pt_info"]
+        )
+        audio_seqlens = convert_tensor(
+            "audio_seqlens", inputs_data["audio_seqlens"], input_meta["saved_pt_info"]
+        )
 
         # Call the get_rope_index function
         position_ids, mrope_position_deltas = self.model.get_rope_index(
             input_ids=input_ids,
             image_grid_thw=image_grid_thw,
             attention_mask=attention_mask,
-            use_audio_in_video=metadata["bool_inputs"]["use_audio_in_video"],
+            use_audio_in_video=input_meta["bool_inputs"]["use_audio_in_video"],
             audio_seqlens=audio_seqlens,
             video_grid_thw=None,
             second_per_grids=None,
         )
 
-        # Convert the expected outputs to MLX arrays
-        expected_position_ids = mx.array(outputs["output_0"])
-        expected_mrope_position_deltas = mx.array(outputs["output_1"])
+        # Convert the expected outputs to MLX arrays using metadata
+        expected_position_ids = convert_tensor(
+            "output_0", outputs_data["output_0"], output_meta["saved_pt_info"]
+        )
+        expected_mrope_position_deltas = convert_tensor(
+            "output_1", outputs_data["output_1"], output_meta["saved_pt_info"]
+        )
 
         # Check that the outputs match the expected values
         self.assertTrue(mx.array_equal(position_ids, expected_position_ids))

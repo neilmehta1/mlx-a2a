@@ -1,21 +1,21 @@
 {
   "none_outputs": {},
   "bool_outputs": {},
-  "saved_npz_info": {
+  "saved_pt_info": {
     "output_0": {
       "shape": [
         3,
         1,
         312
       ],
-      "dtype": "int64"
+      "dtype": "torch.int64"
     },
     "output_1": {
       "shape": [
         1,
         1
       ],
-      "dtype": "int64"
+      "dtype": "torch.int64"
     }
   }
 }

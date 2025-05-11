@@ -6,33 +6,33 @@
   "bool_inputs": {
     "use_audio_in_video": false
   },
-  "saved_npz_info": {
+  "saved_pt_info": {
     "input_ids": {
       "shape": [
         1,
         312
       ],
-      "dtype": "int64"
+      "dtype": "torch.int64"
     },
     "image_grid_thw": {
       "shape": [
         1,
         3
       ],
-      "dtype": "int64"
+      "dtype": "torch.int64"
     },
     "attention_mask": {
       "shape": [
         1,
         312
       ],
-      "dtype": "int64"
+      "dtype": "torch.int64"
     },
     "audio_seqlens": {
       "shape": [
         1
       ],
-      "dtype": "int64"
+      "dtype": "torch.int64"
     }
   }
 }
