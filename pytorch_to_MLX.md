@@ -72,3 +72,8 @@ ARRAY.float() --> ARRAY.astype(mx.float32)
 
 ## LESSON:
 torch.empty((X, Y), dtype=torch.int64) --> mx.random.randint(-1000000000, 1000000000, (X, Y), dtype=mx.int64)
+
+## LESSON:
+Remove all device moving, it's not needed for MLX
+`.to(ARRAY.device)`
+`.to(torch_device)`
