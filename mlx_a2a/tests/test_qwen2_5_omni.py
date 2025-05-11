@@ -17,8 +17,10 @@ class TestQwen25Omni(unittest.TestCase):
     def test_get_rope_index(self):
         """Test the get_rope_index function using captured IO data."""
         # Load the captured inputs and outputs
-        inputs = np.load("io_capture_get_rope_index/get_rope_index_inputs.npz")
-        outputs = np.load("io_capture_get_rope_index/get_rope_index_outputs.npz")
+        func_name = "qwen2_5omnithinkerforconditionalgeneration_get_rope_index"
+        dir_name = f"io_capture_{func_name}"
+        inputs = np.load(f"{dir_name}/inputs.npz")
+        outputs = np.load(f"{dir_name}/outputs.npz")
 
         # Convert inputs to MLX arrays
         input_ids = mx.array(inputs["input_ids"])
@@ -27,7 +29,7 @@ class TestQwen25Omni(unittest.TestCase):
         audio_seqlens = mx.array(inputs["audio_seqlens"])
 
         # Load metadata for None and boolean inputs
-        with open("io_capture_get_rope_index/get_rope_index_metadata.json", "r") as f:
+        with open(f"{dir_name}/input_metadata.json", "r") as f:
             metadata = json.load(f)
 
         # Call the get_rope_index function
