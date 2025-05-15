@@ -14,6 +14,13 @@ from torch import arange as torch_arange
 import numpy as np
 
 
+def _convert_lengths_to_indices_for_mx_split(chunk_lengths: mx.array):
+    chunk_indicies = chunk_lengths.tolist()
+    for i in range(1, len(chunk_indicies)):
+        chunk_indicies[i] += chunk_indicies[i - 1]
+    return chunk_indicies[:-1]
+
+
 @dataclass
 class ThinkerTextConfigArgs:
     hidden_size: int
@@ -442,20 +449,19 @@ class Qwen2_5_Talker(nn.Module):
 class SinusoidsPositionEmbedding(nn.Module):
     def __init__(self, length, channels, max_timescale=10000):
         super().__init__()
-        # if channels % 2 != 0:
-        #     raise ValueError("SinusoidsPositionEmbedding needs even channels input")
-        # log_timescale_increment = np.log(max_timescale) / (channels // 2 - 1)
-        # inv_timescales = torch.exp(
-        #     -log_timescale_increment * torch.arange(channels // 2)
-        # ).float()
-        # scaled_time = (
-        #     torch.arange(length)[:, np.newaxis] * inv_timescales[np.newaxis, :]
-        # )
-        # self.register_buffer(
-        #     "positional_embedding",
-        #     torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=1),
-        #     persistent=False,
-        # )
+        if channels % 2 != 0:
+            raise ValueError("SinusoidsPositionEmbedding needs even channels input")
+        log_timescale_increment = np.log(max_timescale) / (channels // 2 - 1)
+        inv_timescales = mx.exp(
+            -log_timescale_increment * mx.arange(channels // 2)
+        ).astype(mx.float32)
+        scaled_time = mx.arange(length)[:, np.newaxis] * inv_timescales[np.newaxis, :]
+        self._positional_embedding = mx.concatenate(
+            [mx.sin(scaled_time), mx.cos(scaled_time)], axis=1
+        )
+
+    def forward(self, seqlen: int):
+        return self._positional_embedding[:seqlen, :]
 
 
 class Qwen2_5OmniAudioAttention(nn.Module):
@@ -486,6 +492,61 @@ class Qwen2_5OmniAudioAttention(nn.Module):
         self.q_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=True)
         self.out_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=True)
 
+    def __call__(
+        self,
+        hidden_states: mx.array,
+        cu_seqlens: Optional[mx.array] = None,
+    ) -> Tuple[mx.array, Optional[mx.array], Optional[Tuple[mx.array]]]:
+        """Input shape: Batch x Time x Channel"""
+
+        seq_length = hidden_states.shape[0]
+
+        query_states = self.q_proj(hidden_states).reshape(
+            seq_length, self.num_heads, -1
+        )
+        key_states = self.k_proj(hidden_states).reshape(seq_length, self.num_heads, -1)
+        value_states = self.v_proj(hidden_states).reshape(
+            seq_length, self.num_heads, -1
+        )
+
+        query_states = query_states.swapaxes(0, 1)
+        key_states = key_states.swapaxes(0, 1)
+        value_states = value_states.swapaxes(0, 1)
+        attn_weights = mx.matmul(query_states, key_states.swapaxes(1, 2)) / math.sqrt(
+            self.head_dim
+        )
+
+        attention_mask = mx.full(
+            [1, seq_length, key_states.shape[1]],
+            mx.finfo(query_states.dtype).min,
+            dtype=query_states.dtype,
+        )
+        cu_seqlens = cu_seqlens.tolist()
+        for i in range(1, len(cu_seqlens)):
+            attention_mask[
+                ...,
+                cu_seqlens[i - 1] : cu_seqlens[i],
+                cu_seqlens[i - 1] : cu_seqlens[i],
+            ] = 0
+
+        attn_weights = attn_weights + attention_mask
+
+        attn_weights = nn.softmax(attn_weights, axis=-1).astype(query_states.dtype)
+
+        # attn_output = mx.matmul(attn_weights, value_states).transpose(1, 0, 2).reshape(seq_length, self.embed_dim)
+        attn_output = (
+            mx.matmul(attn_weights, value_states)
+            .swapaxes(0, 1)
+            .reshape(seq_length, self.embed_dim)
+        )
+
+        # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
+        # partitioned across GPUs when using tensor-parallelism.
+
+        attn_output = self.out_proj(attn_output)
+
+        return attn_output
+
 
 class Qwen2_5OmniAudioEncoderLayer(nn.Module):
     def __init__(self, args: ThinkerConfigArgs):
@@ -501,16 +562,68 @@ class Qwen2_5OmniAudioEncoderLayer(nn.Module):
         self.fc2 = nn.Linear(args.audio_config.encoder_ffn_dim, self.embed_dim)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
 
+    def __call__(
+        self,
+        hidden_states: mx.array,
+        cu_seqlens: mx.array,
+    ) -> mx.array:
+        """
+        Args:
+            hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
+            attention_mask (`torch.FloatTensor`): attention mask of size
+                `(batch, 1, tgt_len, src_len)` where padding elements are indicated by very large negative values.
+            layer_head_mask (`torch.FloatTensor`): mask for attention heads in a given layer of size
+                `(encoder_attention_heads,)`.
+            output_attentions (`bool`, *optional*):
+                Whether or not to return the attentions tensors of all attention layers. See `attentions` under
+                returned tensors for more detail.
+        """
+        residual = hidden_states
+        hidden_states = self.self_attn_layer_norm(hidden_states)
+        hidden_states = self.self_attn(
+            hidden_states=hidden_states,
+            cu_seqlens=cu_seqlens,
+        )
+        hidden_states = residual + hidden_states
+        residual = hidden_states
+        hidden_states = self.final_layer_norm(hidden_states)
+        hidden_states = self.fc1(hidden_states)
+        hidden_states = self.activation_fn(hidden_states)
+        hidden_states = self.fc2(hidden_states)
+        hidden_states = residual + hidden_states
+
+        return hidden_states
+
+
+# class Conv1dReshaped(nn.Conv1d):
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+
+#         # transpose the dimensions of the weights to match the tensor shape
+#         self.weight = self.weight.transpose(0, 2, 1)
+
+#     def __call__(self, x):
+#         # un-transpose the weights before call to match MLX expectation
+#         y = mx.conv1d(
+#             x,
+#             self.weight.transpose(0, 2, 1),
+#             self.stride,
+#             self.padding,
+#             self.dilation,
+#             self.groups,
+#         )
+#         if "bias" in self:
+#             y = y + self.bias
+#         return y
+
 
 class Conv1dReshaped(nn.Conv1d):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # transpose the dimensions of the weights to match the tensor shape
-        self.weight = self.weight.transpose(0, 2, 1)
+    def __setattr__(self, key: str, val: Any):
+        if key == "weight":
+            val = mx.swapaxes(val, 1, 2)
+        self[key] = val
 
     def __call__(self, x):
-        # un-transpose the weights before call to match MLX expectation
         y = mx.conv1d(
             x,
             self.weight.transpose(0, 2, 1),
@@ -605,6 +718,116 @@ class Qwen2_5OmniAudioEncoder(nn.Module):
         input_lengths = (input_lengths - 1) // 2 + 1
         output_lengths = (input_lengths - 2) // 2 + 1
         return input_lengths, output_lengths
+
+    def __call__(
+        self,
+        input_features: mx.array,
+        feature_lens: Optional[mx.array] = None,
+        aftercnn_lens: Optional[mx.array] = None,
+    ):
+        if feature_lens is None:
+            raise ValueError("feature_lens must be provided")
+        if aftercnn_lens is None:
+            raise ValueError("aftercnn_lens must be provided")
+
+        chunk_num = mx.ceil(feature_lens / (self.n_window * 2)).astype(
+            mx.int32
+        )  # Shape (B,)
+
+        num_chunks_total = chunk_num.sum().item()  # Scalar
+        # Initialize chunk_lengths with default window size
+        chunk_lengths = mx.full((num_chunks_total,), self.n_window * 2, dtype=mx.int32)
+
+        torch_style_padded_cumsum = mx.pad(
+            chunk_num, ((1, 0),), constant_values=mx.array(-1, dtype=mx.int32)
+        ).cumsum(axis=0)
+        tail_chunk_index = torch_style_padded_cumsum[1:]  # Shape (B,)
+        chunk_lengths[tail_chunk_index] = feature_lens % (self.n_window * 2)
+
+        chunk_lengths = mx.where(chunk_lengths == 0, self.n_window * 2, chunk_lengths)
+        chunk_indicies = _convert_lengths_to_indices_for_mx_split(chunk_lengths)
+        chunk_list = input_features.split(chunk_indicies, axis=1)
+
+        padded_feature, padded_mask, padded_mask_after_cnn = (
+            self.padded_and_mask_function(chunk_list, chunk_lengths)
+        )
+        padded_embed = nn.gelu(self.conv1(padded_feature.swapaxes(1, 2)))
+        padded_embed = padded_embed.transpose(0, 2, 1) * padded_mask
+        padded_embed = nn.gelu(self.conv2(padded_embed.swapaxes(1, 2)))
+
+        padded_embed = padded_embed + mx.expand_dims(
+            self.positional_embedding._positional_embedding[: padded_embed.shape[1], :],
+            0,
+        ).astype(padded_embed.dtype)
+
+        # Need to flatten to get the indexing working correctly
+        hidden_states = padded_embed.flatten(0, 1)[
+            np.where(padded_mask_after_cnn)[0].tolist()
+        ]
+
+        cu_seqlens = mx.concatenate(
+            (
+                mx.zeros(1, dtype=mx.int32),
+                padded_mask_after_cnn.sum(1).cumsum(0),
+            )
+        )
+        raise Exception(f"{hidden_states[0][0]}")
+        for idx, encoder_layer in enumerate(self.layers):
+            hidden_states = encoder_layer(
+                hidden_states,
+                cu_seqlens,
+            )
+
+        aftercnn_indices = _convert_lengths_to_indices_for_mx_split(aftercnn_lens)
+        hidden_states_list = hidden_states.split(aftercnn_indices, axis=0)
+        token_audio_list = []
+        for each_audio_states in hidden_states_list:
+            # MLX AvgPool1d doesn't accept 2d input, so create a 3d array w/ batch size 1
+            raise Exception(f"{each_audio_states[0][0]=}")
+            each_audio_states = self.avg_pooler(
+                mx.expand_dims(each_audio_states, 0)
+            ).squeeze(0)
+
+            each_audio_states = self.ln_post(each_audio_states)
+            each_audio_states = self.proj(each_audio_states)
+            token_audio_list.append(each_audio_states)
+            print(f"{each_audio_states[0][0]=}")
+        last_hidden_state = mx.concatenate(token_audio_list, axis=0)  # token audio
+        return last_hidden_state
+
+    def padded_and_mask_function(
+        self,
+        tensor_list: List[mx.array],
+        tensor_len: mx.array,  # Shape (B_chunks,) - number of chunks from input_features.split
+        padding_value=0,
+    ):
+        max_len = tensor_len.max()
+        dim = tensor_list[0].shape[0]
+        padded_tensor = mx.full(
+            shape=(len(tensor_list), dim, max_len),
+            vals=padding_value,
+            dtype=self.proj.weight.dtype,
+        )
+        batch_mask = mx.zeros(
+            (len(tensor_len), max_len),
+            dtype=mx.int64,
+        )
+        for i, length in enumerate(tensor_len):
+            batch_mask[i, : int(length)] = 1
+            padded_tensor[i, :, : int(length)] = tensor_list[i]
+        feature_lens_after_cnn = (tensor_len - 1) // 2 + 1
+        max_len_after_cnn = feature_lens_after_cnn.max()
+        batch_mask_after_cnn = mx.zeros(
+            (len(tensor_len), max_len_after_cnn),
+            dtype=mx.int64,
+        )
+        for i, length in enumerate(feature_lens_after_cnn):
+            batch_mask_after_cnn[i, : int(length)] = 1
+        return (
+            padded_tensor,
+            mx.expand_dims(batch_mask, 1),
+            batch_mask_after_cnn.astype(mx.bool_),
+        )
 
 
 class Qwen2RMSNorm(nn.Module):

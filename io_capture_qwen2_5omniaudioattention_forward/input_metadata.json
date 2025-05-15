@@ -1,0 +1,19 @@
+{
+  "none_inputs": {},
+  "bool_inputs": {},
+  "saved_pt_info": {
+    "hidden_states": {
+      "shape": [
+        202,
+        1280
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "cu_seqlens": {
+      "shape": [
+        4
+      ],
+      "dtype": "torch.int32"
+    }
+  }
+}

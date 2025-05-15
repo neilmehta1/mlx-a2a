@@ -77,3 +77,22 @@ torch.empty((X, Y), dtype=torch.int64) --> mx.random.randint(-1000000000, 100000
 Remove all device moving, it's not needed for MLX
 `.to(ARRAY.device)`
 `.to(torch_device)`
+
+## LESSON:
+`.split` arg is slightly different
+
+PyTorch:
+```
+If split_size_or_sections is an integer type, then tensor will be split into equally sized chunks (if possible). Last chunk will be smaller if the tensor size along the given dimension dim is not divisible by split_size.
+
+If split_size_or_sections is a list, then tensor will be split into len(split_size_or_sections) chunks with sizes in dim according to split_size_or_sections.
+
+```
+
+MLX:
+```
+indices_or_sections (int or list(int)) – If indices_or_sections is an integer the array is split into that many sections of equal size. An error is raised if this is not possible. If indices_or_sections is a list, the list contains the indices of the start of each subarray along the given axis.
+```
+
+## LESSON:
+ARRAY.transpose(1, 3) --> ARRAY.swapaxes(1, 3)

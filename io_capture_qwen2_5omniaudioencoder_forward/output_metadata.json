@@ -1,0 +1,13 @@
+{
+  "none_outputs": {},
+  "bool_outputs": {},
+  "saved_pt_info": {
+    "output": {
+      "shape": [
+        101,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    }
+  }
+}

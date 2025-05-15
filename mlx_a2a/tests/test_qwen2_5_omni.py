@@ -7,6 +7,27 @@ from pathlib import Path
 from mlx_a2a.convert import load_model
 
 
+# Helper for conversion (module level)
+def convert_tensor(tensor_key, torch_tensor, meta_dict_section):
+    dtype_str = meta_dict_section[tensor_key]["dtype"]
+    if dtype_str == "torch.bfloat16":
+        return mx.array(torch_tensor.cpu().float().numpy(), dtype=mx.bfloat16)
+    elif dtype_str == "torch.float16":
+        return mx.array(torch_tensor.numpy(), dtype=mx.float16)
+    elif dtype_str == "torch.float32":
+        return mx.array(torch_tensor.numpy(), dtype=mx.float32)
+    elif dtype_str == "torch.int64":
+        return mx.array(torch_tensor.numpy(), dtype=mx.int64)
+    elif dtype_str == "torch.int32":
+        return mx.array(torch_tensor.numpy(), dtype=mx.int32)
+    elif dtype_str == "torch.bool":
+        return mx.array(torch_tensor.numpy(), dtype=mx.bool_)
+    # Add other mappings as needed or a fallback
+    else:  # Fallback: let MLX infer, or convert to a common type like float32 if appropriate
+        # This might need adjustment based on actual dtypes encountered
+        return mx.array(torch_tensor.numpy())
+
+
 class TestQwen25Omni(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -28,26 +49,6 @@ class TestQwen25Omni(unittest.TestCase):
             input_meta = json.load(f)
         with open(f"{dir_name}/output_metadata.json", "r") as f:
             output_meta = json.load(f)
-
-        # Helper for conversion
-        def convert_tensor(tensor_key, torch_tensor, meta_dict_section):
-            dtype_str = meta_dict_section[tensor_key]["dtype"]
-            if dtype_str == "torch.bfloat16":
-                return mx.array(torch_tensor.float().numpy(), dtype=mx.bfloat16)
-            elif dtype_str == "torch.float16":
-                return mx.array(torch_tensor.numpy(), dtype=mx.float16)
-            elif dtype_str == "torch.float32":
-                return mx.array(torch_tensor.numpy(), dtype=mx.float32)
-            elif dtype_str == "torch.int64":
-                return mx.array(torch_tensor.numpy(), dtype=mx.int64)
-            elif dtype_str == "torch.int32":
-                return mx.array(torch_tensor.numpy(), dtype=mx.int32)
-            elif dtype_str == "torch.bool":
-                return mx.array(torch_tensor.numpy(), dtype=mx.bool_)
-            # Add other mappings as needed or a fallback
-            else:  # Fallback: let MLX infer, or convert to a common type like float32 if appropriate
-                # This might need adjustment based on actual dtypes encountered
-                return mx.array(torch_tensor.numpy())
 
         # Convert inputs to MLX arrays using metadata
         input_ids = convert_tensor(
@@ -238,6 +239,103 @@ class TestQwen25Omni(unittest.TestCase):
             self.model.thinker.args.vision_config.spatial_merge_size = (
                 orig_spatial_merge_size
             )
+
+    def test_io_capture_qwen2_5omniaudioattention_forward(self):
+        """Test the Qwen2_5OmniAudioAttention forward pass using captured IO data."""
+        # Dynamically import Qwen2_5OmniAudioAttention to avoid circular dependency issues
+        # if it's not already available or to ensure the correct one is used.
+
+        func_name = "qwen2_5omniaudioattention_forward"
+        dir_name = f"io_capture_{func_name}"
+
+        inputs_data = torch.load(f"{dir_name}/inputs.pt")
+        outputs_data = torch.load(f"{dir_name}/outputs.pt")
+
+        with open(f"{dir_name}/input_metadata.json", "r") as f:
+            input_meta = json.load(f)
+        with open(f"{dir_name}/output_metadata.json", "r") as f:
+            output_meta = json.load(f)
+
+        # Convert inputs
+        hidden_states_mlx = convert_tensor(
+            "hidden_states", inputs_data["hidden_states"], input_meta["saved_pt_info"]
+        )
+        cu_seqlens_mlx = convert_tensor(
+            "cu_seqlens", inputs_data["cu_seqlens"], input_meta["saved_pt_info"]
+        )
+
+        audio_attention_module = self.model.thinker.audio_tower.layers[0].self_attn
+
+        # Call the forward pass
+        # The __call__ method of Qwen2_5OmniAudioAttention returns a single tensor
+        output_mlx = audio_attention_module(
+            hidden_state=hidden_states_mlx,
+            cu_seqlens=cu_seqlens_mlx,
+        )
+
+        # Convert expected output
+        # The output_metadata.json refers to the output as "output"
+        expected_output_mlx = convert_tensor(
+            "output", outputs_data["output"], output_meta["saved_pt_info"]
+        )
+
+        # Check that the output matches the expected value
+        # Using allclose for floating point comparisons
+        print(
+            f"{output_mlx=}, {expected_output_mlx=} {output_mlx.shape=}, {expected_output_mlx.shape=}"
+        )
+        self.assertTrue(
+            mx.allclose(output_mlx, expected_output_mlx, atol=1e-2, rtol=1e-2)
+        )
+
+    def test_io_capture_qwen2_5omniaudioencoder_forward(self):
+        """Test the Qwen2_5OmniAudioEncoder forward pass using captured IO data."""
+        # Qwen2_5OmniAudioEncoder is self.model.thinker.audio_tower
+        audio_encoder_module = self.model.thinker.audio_tower
+
+        func_name = "qwen2_5omniaudioencoder_forward"
+        dir_name = f"io_capture_{func_name}"
+
+        inputs_data = torch.load(f"{dir_name}/inputs.pt")
+        outputs_data = torch.load(f"{dir_name}/outputs.pt")
+
+        with open(f"{dir_name}/input_metadata.json", "r") as f:
+            input_meta = json.load(f)
+        with open(f"{dir_name}/output_metadata.json", "r") as f:
+            output_meta = json.load(f)
+
+        # convert_tensor is now a module-level function
+        # Convert inputs
+        input_features_mlx = convert_tensor(
+            "input_features", inputs_data["input_features"], input_meta["saved_pt_info"]
+        )
+        feature_lens_mlx = convert_tensor(
+            "feature_lens", inputs_data["feature_lens"], input_meta["saved_pt_info"]
+        )
+        aftercnn_lens_mlx = convert_tensor(
+            "aftercnn_lens", inputs_data["aftercnn_lens"], input_meta["saved_pt_info"]
+        )
+
+        # Call the forward pass (__call__ method)
+        output_mlx = audio_encoder_module(
+            input_features=input_features_mlx,
+            feature_lens=feature_lens_mlx,
+            aftercnn_lens=aftercnn_lens_mlx,
+        )
+
+        # Convert expected output
+        expected_output_mlx = convert_tensor(
+            "output", outputs_data["output"], output_meta["saved_pt_info"]
+        )
+
+        # Check that the output matches the expected value
+        # Using allclose for floating point comparisons, especially with bfloat16
+        print(
+            f"{output_mlx=} {expected_output_mlx=} {output_mlx.shape=} {expected_output_mlx.shape=}"
+        )
+        self.assertTrue(
+            mx.allclose(output_mlx, expected_output_mlx, atol=1e-1, rtol=1e-1)
+        )
 
 
 if __name__ == "__main__":

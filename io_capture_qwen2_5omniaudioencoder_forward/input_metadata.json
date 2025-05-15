@@ -1,0 +1,25 @@
+{
+  "none_inputs": {},
+  "bool_inputs": {},
+  "saved_pt_info": {
+    "input_features": {
+      "shape": [
+        128,
+        404
+      ],
+      "dtype": "torch.float32"
+    },
+    "feature_lens": {
+      "shape": [
+        1
+      ],
+      "dtype": "torch.int64"
+    },
+    "aftercnn_lens": {
+      "shape": [
+        1
+      ],
+      "dtype": "torch.int64"
+    }
+  }
+}
